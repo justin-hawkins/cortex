@@ -1,0 +1,127 @@
+# Task Schema for Distributed Agentic Task System
+# This defines the structure of tasks in the Celery queue
+
+task:
+  # Identification
+  id:
+    type: string
+    format: uuid
+    required: true
+  parent_id:
+    type: string
+    format: uuid
+    nullable: true
+  project_id:
+    type: string
+    format: uuid
+    required: true
+
+  # Task definition
+  type:
+    type: string
+    enum: [decompose, execute, validate, merge]
+    required: true
+  domain:
+    type: string
+    enum:
+      - code-general
+      - code-vision
+      - code-embedded
+      - code-mobile
+      - documentation
+      - ui-design
+      - architecture
+      - analysis
+    required: true
+  description:
+    type: string
+    required: true
+  inputs:
+    type: array
+    items:
+      artifact_id:
+        type: string
+        format: uuid
+      relationship:
+        type: string
+        enum: [consumes, references]
+
+  # Routing
+  routing:
+    tier:
+      type: string
+      enum: [tiny, small, large, frontier]
+      required: true
+    recommended_model:
+      type: string
+      enum:
+        - gemma3:4b
+        - gemma3:12b
+        - gpt-oss:20b
+        - qwen3-coder:30b-a3b-q8_0-64k
+        - qwen3-coder:30b-a3b-fp16-64k
+        - claude-sonnet-4-20250514
+    required_capabilities:
+      type: array
+      items:
+        type: string
+    estimated_context_tokens:
+      type: integer
+
+  # Prompt configuration
+  prompt_template:
+    name:
+      type: string
+      required: true
+    version:
+      type: string
+      default: "latest"
+
+  # Mode and approvals
+  mode:
+    type: string
+    enum: [autonomous, collaborative]
+    default: autonomous
+  requires_human_approval:
+    type: boolean
+    default: false
+
+  # Quality assurance
+  qa_profile:
+    type: string
+    enum: [consensus, adversarial, security, testing, documentation, human, none]
+    nullable: true
+  validation_checks:
+    type: array
+    items:
+      type: string
+      enum: [security, testing, performance, brand]
+
+  # Execution tracking
+  status:
+    type: string
+    enum:
+      - queued
+      - in_progress
+      - completed
+      - failed
+      - needs_human
+      - needs_redecomp
+    default: queued
+  assigned_worker:
+    type: string
+    nullable: true
+  attempts:
+    type: integer
+    default: 0
+  max_attempts:
+    type: integer
+    default: 3
+
+  # Timestamps
+  created_at:
+    type: string
+    format: datetime
+  updated_at:
+    type: string
+    format: datetime

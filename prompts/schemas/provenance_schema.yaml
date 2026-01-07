@@ -1,0 +1,83 @@
+# Provenance Schema for Distributed Agentic Task System
+# Tracks lineage of all outputs for traceability and rollback
+
+provenance:
+  # Identification
+  id:
+    type: string
+    format: uuid
+    required: true
+  task_id:
+    type: string
+    format: uuid
+    required: true
+  project_id:
+    type: string
+    format: uuid
+    required: true
+
+  # What was produced
+  outputs:
+    type: array
+    items:
+      artifact_id:
+        type: string
+        format: uuid
+      type:
+        type: string
+        enum: [code, document, config, analysis, architecture]
+      location:
+        type: string
+        description: "Path in work product store"
+      checksum:
+        type: string
+        description: "SHA256 of content"
+
+  # Lineage
+  inputs_consumed:
+    type: array
+    items:
+      type: string
+      format: uuid
+    description: "Artifact IDs this output depends on"
+
+  # Execution details
+  model_used:
+    type: string
+    required: true
+  worker_id:
+    type: string
+    required: true
+  prompt_template:
+    name:
+      type: string
+    version:
+      type: string
+
+  # Quality indicators
+  confidence:
+    type: number
+    minimum: 0.0
+    maximum: 1.0
+  verification_status:
+    type: string
+    enum: [pending, passed, failed, human_approved, tainted]
+  verification_details:
+    type: object
+    description: "QA results if applicable"
+
+  # Timestamps
+  started_at:
+    type: string
+    format: datetime
+  completed_at:
+    type: string
+    format: datetime
+
+  # Metrics
+  tokens_input:
+    type: integer
+  tokens_output:
+    type: integer
+  execution_time_ms:
+    type: integer
