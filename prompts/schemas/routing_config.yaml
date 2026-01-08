@@ -7,7 +7,7 @@ model_tiers:
     safe_working_limit: 22000
     models:
       - name: gemma3:4b
-        endpoint: "http://192.168.1.79:11434"
+        endpoint: "http://192.168.1.12:11434"
         type: ollama
 
   small:
@@ -15,7 +15,7 @@ model_tiers:
     safe_working_limit: 22000
     models:
       - name: gemma3:12b
-        endpoint: "http://192.168.1.79:11434"
+        endpoint: "http://192.168.1.12:11434"
         type: ollama
 
   large:
@@ -45,7 +45,7 @@ model_tiers:
 
 embedding:
   model: mxbai-embed-large:335m
-  endpoint: "http://192.168.1.11:11434"
+  endpoint: "http://192.168.1.12:11434"
   type: ollama
 
 # Agent role to model assignments

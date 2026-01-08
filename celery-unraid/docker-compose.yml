@@ -1,0 +1,21 @@
+services:
+  celery-worker:
+    build: .
+    container_name: celery-worker
+    restart: unless-stopped
+    networks:
+      - br0
+    environment:
+      - CELERY_BROKER_URL=amqp://guest:guest@192.168.1.49:5672//
+      - CELERY_RESULT_BACKEND=rpc://
+    volumes:
+      - ./app:/app/app:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  br0:
+    external: true
