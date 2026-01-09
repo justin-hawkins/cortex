@@ -125,24 +125,23 @@ class RAGQueryEngine:
     def __init__(
         self,
         storage_path: Optional[str] = None,
-        embedding_endpoint: str = "http://192.168.1.12:11434",
-        embedding_model: str = "mxbai-embed-large:335m",
+        embedding_endpoint: Optional[str] = None,
+        embedding_model: Optional[str] = None,
     ):
         """
         Initialize query engine.
 
         Args:
-            storage_path: Path to RAG storage
-            embedding_endpoint: Ollama endpoint for embeddings
-            embedding_model: Embedding model name
+            storage_path: Path to RAG storage (defaults to settings.rag_storage_path)
+            embedding_endpoint: Ollama endpoint for embeddings (defaults to settings.rag_embedding_endpoint)
+            embedding_model: Embedding model name (defaults to settings.rag_embedding_model)
         """
         settings = get_settings()
 
-        self._storage_path = storage_path or (
-            settings.rag_storage_path if hasattr(settings, "rag_storage_path") else "data/rag"
-        )
-        self._embedding_endpoint = embedding_endpoint
-        self._embedding_model = embedding_model
+        # Use settings as defaults - server config is centralized in servers.yaml
+        self._storage_path = storage_path or settings.rag_storage_path
+        self._embedding_endpoint = embedding_endpoint or settings.rag_embedding_endpoint
+        self._embedding_model = embedding_model or settings.rag_embedding_model
 
         # Lazy initialized clients
         self._embedding_client: Optional[EmbeddingClient] = None
@@ -437,10 +436,6 @@ class RAGQueryEngine:
 # Convenience functions for synchronous usage
 
 def get_query_engine() -> RAGQueryEngine:
-    """Get configured query engine instance."""
-    settings = get_settings()
-    return RAGQueryEngine(
-        storage_path=settings.rag_storage_path if hasattr(settings, "rag_storage_path") else "data/rag",
-        embedding_endpoint=settings.rag_embedding_endpoint if hasattr(settings, "rag_embedding_endpoint") else "http://192.168.1.12:11434",
-        embedding_model=settings.rag_embedding_model if hasattr(settings, "rag_embedding_model") else "mxbai-embed-large:335m",
-    )
+    """Get configured query engine instance using centralized settings."""
+    # All settings come from settings.py which references servers.yaml
+    return RAGQueryEngine()

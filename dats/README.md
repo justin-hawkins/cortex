@@ -44,14 +44,32 @@ DATS uses a hierarchical agent architecture with specialized workers to handle d
 └─────────────────┘
 ```
 
+## Server Infrastructure
+
+Server configuration is centralized in `src/config/servers.yaml`. 
+
+### Compute Servers
+
+| Server | IP | Hardware | Services |
+|--------|-----|----------|----------|
+| epyc_server | 192.168.1.11 | AMD Epyc 32-core + 2x RTX5060Ti 16GB | Ollama (CPU mode), vLLM (GPU) |
+| rtx4060_server | 192.168.1.12 | 2x RTX4060Ti 16GB | Ollama (GPU mode) |
+
+### Infrastructure Services
+
+| Service | IP:Port | Purpose |
+|---------|---------|---------|
+| RabbitMQ | 192.168.1.49:5672 | Message broker for Celery |
+| Redis | 192.168.1.44:6379 | Result backend |
+
 ## Model Tiers
 
-| Tier     | Models                          | Context | Use Case                    |
-|----------|--------------------------------|---------|------------------------------|
-| tiny     | gemma3:4b                      | 32k     | Simple transformations       |
-| small    | gemma3:12b                     | 32k     | Standard coding tasks        |
-| large    | qwen3-coder, gpt-oss:20b       | 64k     | Complex reasoning            |
-| frontier | claude-sonnet-4                | 200k    | Most complex tasks           |
+| Tier     | Models                          | Server | Context | Use Case                    |
+|----------|--------------------------------|--------|---------|------------------------------|
+| tiny     | gemma3:4b, qwen3-4b-m32k       | rtx4060_server | 32k     | Simple transformations       |
+| small    | gemma3:12b, gemma3:27b         | rtx4060_server | 32k     | Standard coding tasks        |
+| large    | gpt-oss:20b (vLLM), qwen3-coder:30b variants | epyc_server | 64k     | Complex reasoning            |
+| frontier | claude-sonnet-4                | Anthropic API | 200k    | Most complex tasks           |
 
 ## Installation
 
@@ -69,17 +87,23 @@ pip install -e .
 
 ## Configuration
 
+### Centralized Server Configuration
+
+Server IPs, available models, and infrastructure are defined in `src/config/servers.yaml`. This is the single source of truth for all endpoint configurations. When server IPs change, update only this file.
+
+### Environment Variables
+
 Create a `.env` file with your configuration:
 
 ```env
-# RabbitMQ
+# RabbitMQ (default from servers.yaml: 192.168.1.49:5672)
 RABBITMQ_HOST=192.168.1.49
 RABBITMQ_PORT=5672
 RABBITMQ_USER=guest
 RABBITMQ_PASSWORD=guest
 
-# Redis (for results)
-REDIS_HOST=localhost
+# Redis (default from servers.yaml: 192.168.1.44:6379)
+REDIS_HOST=192.168.1.44
 REDIS_PORT=6379
 
 # API Keys
@@ -89,7 +113,16 @@ GITHUB_TOKEN=your-token-here
 # Paths
 PROMPTS_DIR=../prompts
 ROUTING_CONFIG_PATH=../prompts/schemas/routing_config.yaml
+SERVERS_CONFIG_PATH=src/config/servers.yaml
 ```
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `src/config/servers.yaml` | Centralized server IPs, services, and model inventory |
+| `src/config/settings.py` | Environment variable management with pydantic |
+| `prompts/schemas/routing_config.yaml` | Model tier assignments and agent routing |
 
 ## Usage
 
@@ -153,6 +186,7 @@ asyncio.run(main())
 dats/
 ├── src/
 │   ├── config/          # Configuration management
+│   │   ├── servers.yaml # Centralized server/model config
 │   │   ├── settings.py  # Environment variables
 │   │   └── routing.py   # Model routing config
 │   ├── models/          # Model client abstractions

@@ -647,6 +647,362 @@ def merge_results(
     return loop.run_until_complete(_merge())
 
 
+# ===== CASCADE FAILURE HANDLING TASKS =====
+
+
+@app.task(base=DATSTask, bind=True, name="src.queue.tasks.propagate_taint")
+def propagate_taint(
+    self,
+    artifact_id: str,
+    reason: str,
+    source_id: str = "",
+    cascade_id: str = "",
+) -> dict[str, Any]:
+    """
+    Propagate taint through the provenance graph.
+
+    Marks the source artifact as tainted and all dependents as suspect.
+
+    Args:
+        artifact_id: Artifact to taint
+        reason: Reason for tainting
+        source_id: ID of what caused the taint
+        cascade_id: ID grouping related events
+
+    Returns:
+        Propagation result
+    """
+    from src.cascade.taint import TaintPropagator
+    from src.rag.embedding_trigger import invalidate_embeddings_sync
+
+    logger.info(f"Starting taint propagation for artifact {artifact_id}")
+
+    provenance_tracker = get_provenance_tracker()
+    propagator = TaintPropagator(provenance_tracker)
+
+    result = propagator.taint_artifact(
+        artifact_id=artifact_id,
+        reason=reason,
+        source_id=source_id,
+        cascade_id=cascade_id,
+    )
+
+    # Invalidate embeddings for tainted/suspect artifacts
+    if result.provenance_ids_to_invalidate:
+        try:
+            removed = invalidate_embeddings_sync(result.provenance_ids_to_invalidate)
+            logger.info(f"Invalidated {removed} embeddings during taint propagation")
+        except Exception as e:
+            logger.error(f"Failed to invalidate embeddings: {e}")
+            result.errors.append(f"Embedding invalidation failed: {e}")
+
+    # Queue revalidation tasks for suspect artifacts
+    if result.revalidation_artifact_ids:
+        for suspect_id in result.revalidation_artifact_ids:
+            queue_revalidation.delay(
+                artifact_id=suspect_id,
+                taint_source_id=artifact_id,
+                taint_reason=reason,
+                cascade_id=result.cascade_id,
+            )
+        result.revalidation_queued = len(result.revalidation_artifact_ids)
+
+    logger.info(
+        f"Taint propagation complete: {result.tainted_count} tainted, "
+        f"{result.suspect_count} suspect, {result.revalidation_queued} revalidations queued"
+    )
+
+    return result.to_dict()
+
+
+@app.task(base=DATSTask, bind=True, name="src.queue.tasks.queue_revalidation")
+def queue_revalidation(
+    self,
+    artifact_id: str,
+    taint_source_id: str,
+    taint_reason: str,
+    cascade_id: str = "",
+    cascade_depth: int = 1,
+) -> dict[str, Any]:
+    """
+    Queue a revalidation task for a suspect artifact.
+
+    Args:
+        artifact_id: Suspect artifact to revalidate
+        taint_source_id: What tainted artifact caused this
+        taint_reason: Why the source was tainted
+        cascade_id: Cascade grouping ID
+        cascade_depth: Current depth in cascade
+
+    Returns:
+        Queued task info
+    """
+    from src.cascade.revalidation import RevalidationTask, RevalidationQueue
+    from src.config.settings import get_settings
+
+    settings = get_settings()
+    provenance_tracker = get_provenance_tracker()
+
+    # Get provenance record
+    record = provenance_tracker.get_producer(artifact_id)
+    if not record:
+        return {"error": f"No provenance record for artifact {artifact_id}"}
+
+    # Create revalidation task
+    task = RevalidationTask(
+        suspect_artifact_id=artifact_id,
+        suspect_provenance_id=record.id,
+        project_id=record.project_id,
+        taint_source_artifact_id=taint_source_id,
+        taint_reason=taint_reason,
+        cascade_id=cascade_id,
+        cascade_depth=cascade_depth,
+    )
+
+    # Add to queue
+    queue = RevalidationQueue(
+        storage_path=getattr(settings, "provenance_path", "data/provenance"),
+    )
+    task_id = queue.add(task)
+
+    logger.info(f"Queued revalidation task {task_id} for artifact {artifact_id}")
+
+    return {
+        "task_id": task_id,
+        "artifact_id": artifact_id,
+        "cascade_id": cascade_id,
+        "cascade_depth": cascade_depth,
+        "status": "queued",
+    }
+
+
+@app.task(base=DATSTask, bind=True, name="src.queue.tasks.process_revalidation_batch")
+def process_revalidation_batch(
+    self,
+    max_batch: int = 10,
+) -> dict[str, Any]:
+    """
+    Process a batch of pending revalidation tasks.
+
+    This should be called periodically by Celery beat.
+
+    Args:
+        max_batch: Maximum tasks to process
+
+    Returns:
+        Processing statistics
+    """
+    from src.cascade.revalidation import (
+        RevalidationQueue,
+        RevalidationEvaluator,
+        process_revalidation_queue,
+    )
+    from src.cascade.taint import TaintPropagator
+    from src.config.settings import get_settings
+
+    settings = get_settings()
+    provenance_tracker = get_provenance_tracker()
+    work_product_store = get_work_product_store()
+
+    # Initialize components
+    queue = RevalidationQueue(
+        storage_path=getattr(settings, "provenance_path", "data/provenance"),
+    )
+    
+    evaluator = RevalidationEvaluator(
+        provenance_tracker=provenance_tracker,
+        work_product_store=work_product_store,
+        model_endpoint=getattr(settings, "vllm_endpoint", "http://192.168.1.11:8000/v1"),
+        model_name="openai/gpt-oss-20b",
+    )
+    
+    propagator = TaintPropagator(provenance_tracker)
+
+    # Run async processing
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    async def _process():
+        try:
+            return await process_revalidation_queue(
+                queue=queue,
+                evaluator=evaluator,
+                taint_propagator=propagator,
+                max_batch=max_batch,
+            )
+        finally:
+            await evaluator.close()
+
+    result = loop.run_until_complete(_process())
+
+    # Check if thresholds exceeded and trigger rollback check
+    if queue.exceeds_thresholds():
+        logger.warning("Revalidation queue exceeds thresholds, considering rollback")
+        # Could trigger rollback assessment here
+
+    return result
+
+
+@app.task(base=DATSTask, bind=True, name="src.queue.tasks.detect_cascade")
+def detect_cascade(
+    self,
+    artifact_id: str,
+    trigger_type: str,
+    trigger_details: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Detect and assess a potential cascade scenario.
+
+    Args:
+        artifact_id: Artifact that triggered detection
+        trigger_type: Type of trigger (qa_failure, human_rejection, etc.)
+        trigger_details: Details about the trigger
+
+    Returns:
+        Cascade scenario if detected
+    """
+    from src.cascade.detector import CascadeDetector, CascadeTrigger
+
+    provenance_tracker = get_provenance_tracker()
+    detector = CascadeDetector(provenance_tracker)
+
+    scenario = None
+    
+    if trigger_type == "qa_failure":
+        scenario = detector.detect_from_qa_failure(
+            task_id=trigger_details.get("task_id", ""),
+            artifact_id=artifact_id,
+            qa_result=trigger_details.get("qa_result", {}),
+        )
+    elif trigger_type == "human_rejection":
+        scenario = detector.detect_from_human_rejection(
+            task_id=trigger_details.get("task_id", ""),
+            artifact_id=artifact_id,
+            rejection_reason=trigger_details.get("reason", ""),
+            reviewer_id=trigger_details.get("reviewer_id", ""),
+        )
+    elif trigger_type == "manual_taint":
+        scenario = detector.detect_from_manual_taint(
+            artifact_id=artifact_id,
+            reason=trigger_details.get("reason", "Manual taint request"),
+            requested_by=trigger_details.get("requested_by", ""),
+        )
+    elif trigger_type == "security_issue":
+        scenario = detector.detect_from_security_issue(
+            artifact_id=artifact_id,
+            vulnerability=trigger_details.get("vulnerability", ""),
+            severity=trigger_details.get("severity", "high"),
+            cve_id=trigger_details.get("cve_id", ""),
+        )
+
+    if not scenario:
+        return {"detected": False, "artifact_id": artifact_id}
+
+    # If cascade detected, trigger propagation based on recommendation
+    if scenario.recommended_action == "propagate":
+        propagate_taint.delay(
+            artifact_id=artifact_id,
+            reason=scenario.reason,
+            cascade_id=scenario.id,
+        )
+    elif scenario.recommended_action == "rollback":
+        # Recommend rollback but don't auto-trigger
+        logger.warning(f"Cascade scenario {scenario.id} recommends rollback")
+
+    return {
+        "detected": True,
+        "scenario": scenario.to_dict(),
+        "should_pause": detector.should_pause_execution(scenario),
+        "affected_tasks": detector.get_affected_tasks(scenario),
+    }
+
+
+@app.task(base=DATSTask, bind=True, name="src.queue.tasks.execute_rollback")
+def execute_rollback(
+    self,
+    checkpoint_id: str,
+    trigger: str = "human_request",
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """
+    Execute a rollback to a checkpoint.
+
+    Args:
+        checkpoint_id: Checkpoint to rollback to
+        trigger: What triggered the rollback
+        dry_run: If True, only calculate impact
+
+    Returns:
+        Rollback result
+    """
+    from src.cascade.rollback import RollbackManager, RollbackTrigger
+    from src.config.settings import get_settings
+
+    settings = get_settings()
+    provenance_tracker = get_provenance_tracker()
+
+    rollback_manager = RollbackManager(
+        provenance_tracker=provenance_tracker,
+        storage_path=getattr(settings, "provenance_path", "data/provenance"),
+    )
+
+    trigger_enum = RollbackTrigger(trigger)
+    result = rollback_manager.rollback_to_checkpoint(
+        checkpoint_id=checkpoint_id,
+        trigger=trigger_enum,
+        dry_run=dry_run,
+    )
+
+    if result.success and not dry_run:
+        # Queue re-execution of affected tasks
+        for task_id in result.details.get("tasks_to_requeue", []):
+            logger.info(f"Would requeue task {task_id} after rollback")
+            # In practice, you would look up and requeue the original task
+
+    return result.to_dict()
+
+
+@app.task(base=DATSTask, bind=True, name="src.queue.tasks.create_checkpoint")
+def create_checkpoint(
+    self,
+    project_id: str,
+    description: str = "",
+    trigger: str = "manual",
+) -> dict[str, Any]:
+    """
+    Create a checkpoint for a project.
+
+    Args:
+        project_id: Project to checkpoint
+        description: Optional description
+        trigger: What triggered the checkpoint
+
+    Returns:
+        Created checkpoint info
+    """
+    from src.cascade.rollback import RollbackManager
+    from src.config.settings import get_settings
+
+    settings = get_settings()
+    provenance_tracker = get_provenance_tracker()
+
+    rollback_manager = RollbackManager(
+        provenance_tracker=provenance_tracker,
+        storage_path=getattr(settings, "provenance_path", "data/provenance"),
+    )
+
+    checkpoint = rollback_manager.create_checkpoint(
+        project_id=project_id,
+        description=description,
+        trigger=trigger,
+    )
+
+    return checkpoint.to_dict()
+
+
 # Task for pipeline processing
 @app.task(base=DATSTask, bind=True, name="src.queue.tasks.process_pipeline")
 def process_pipeline(

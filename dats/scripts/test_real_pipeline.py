@@ -17,11 +17,12 @@ import httpx
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Check if we can reach the Ollama servers first
+# Server configuration is defined in src/config/servers.yaml
 async def check_services():
     """Check if required services are available."""
     services = {
-        "Ollama Primary (192.168.1.79:11434)": "http://192.168.1.79:11434/api/tags",
-        "Ollama Secondary (192.168.1.11:11434)": "http://192.168.1.11:11434/api/tags",
+        "Ollama GPU (192.168.1.12:11434)": "http://192.168.1.12:11434/api/tags",
+        "Ollama CPU (192.168.1.11:11434)": "http://192.168.1.11:11434/api/tags",
     }
     
     print("\n" + "=" * 60)
@@ -75,9 +76,9 @@ async def test_ollama_directly():
     print(prompt)
     print("-" * 40)
     
-    # Use secondary Ollama (192.168.1.11) which is available
+    # Use CPU Ollama (192.168.1.11) for large/high-precision models
     endpoint = "http://192.168.1.11:11434/api/generate"
-    model = "qwen3-coder:30b-a3b-q8_0"  # available model on secondary
+    model = "qwen3-coder:30b-a3b-q8_0-64k"  # available model on CPU server
     
     request_payload = {
         "model": model,
@@ -140,10 +141,10 @@ async def test_coordinator_with_real_model():
     # Import after checking services
     from src.models.ollama_client import OllamaClient
     
-    # Use secondary Ollama which is available
+    # Use CPU Ollama for large models (192.168.1.11)
     client = OllamaClient(
         endpoint="http://192.168.1.11:11434",
-        model_name="qwen3-coder:30b-a3b-q8_0"
+        model_name="qwen3-coder:30b-a3b-q8_0-64k"
     )
     
     # Coordinator analysis prompt
@@ -211,10 +212,10 @@ async def test_complexity_estimator_with_real_model():
     
     from src.models.ollama_client import OllamaClient
     
-    # Use secondary Ollama which is available
+    # Use GPU Ollama (192.168.1.12) for smaller/faster models
     client = OllamaClient(
-        endpoint="http://192.168.1.11:11434",
-        model_name="qwen3-coder:30b-a3b-q8_0"
+        endpoint="http://192.168.1.12:11434",
+        model_name="gemma3:4b"
     )
     
     task_description = "Create a Python function that calculates fibonacci numbers"
@@ -286,10 +287,10 @@ async def test_code_worker_with_real_model():
     
     from src.models.ollama_client import OllamaClient
     
-    # Use secondary Ollama which is available
+    # Use CPU Ollama (192.168.1.11) for large/high-precision code models
     client = OllamaClient(
         endpoint="http://192.168.1.11:11434",
-        model_name="qwen3-coder:30b-a3b-q8_0"
+        model_name="qwen3-coder:30b-a3b-q8_0-64k"
     )
     
     system_prompt = """You are an expert Python developer.

@@ -96,22 +96,31 @@ class EmbeddingClient:
     Client for generating embeddings via Ollama.
 
     Uses mxbai-embed-large:335m model for high-quality embeddings.
+    Server configuration is centralized in servers.yaml.
     """
 
     def __init__(
         self,
-        endpoint: str = "http://192.168.1.12:11434",
-        model_name: str = "mxbai-embed-large:335m",
+        endpoint: str | None = None,
+        model_name: str | None = None,
         timeout: float = 60.0,
     ):
         """
         Initialize embedding client.
 
         Args:
-            endpoint: Ollama API endpoint
-            model_name: Embedding model name
+            endpoint: Ollama API endpoint (defaults to settings.rag_embedding_endpoint)
+            model_name: Embedding model name (defaults to settings.rag_embedding_model)
             timeout: Request timeout in seconds
         """
+        # Import settings lazily to avoid circular imports
+        from src.config.settings import get_settings
+        settings = get_settings()
+        
+        if endpoint is None:
+            endpoint = settings.rag_embedding_endpoint
+        if model_name is None:
+            model_name = settings.rag_embedding_model
         self.endpoint = endpoint.rstrip("/")
         self.model_name = model_name
         self.timeout = timeout

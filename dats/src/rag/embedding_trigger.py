@@ -88,26 +88,27 @@ class EmbeddingTrigger:
     def __init__(
         self,
         storage_path: Optional[str] = None,
-        batch_interval: int = 300,  # 5 minutes
-        batch_size_threshold: int = 10,
-        embedding_endpoint: str = "http://192.168.1.12:11434",
-        embedding_model: str = "mxbai-embed-large:335m",
+        batch_interval: Optional[int] = None,
+        batch_size_threshold: Optional[int] = None,
+        embedding_endpoint: Optional[str] = None,
+        embedding_model: Optional[str] = None,
     ):
         """
         Initialize embedding trigger.
 
         Args:
-            storage_path: Base path for RAG storage
-            batch_interval: Seconds between batch processing
-            batch_size_threshold: Number of items to trigger immediate batch
-            embedding_endpoint: Ollama endpoint for embeddings
-            embedding_model: Embedding model name
+            storage_path: Base path for RAG storage (defaults to settings.rag_storage_path)
+            batch_interval: Seconds between batch processing (defaults to settings.rag_batch_interval)
+            batch_size_threshold: Number of items to trigger immediate batch (defaults to settings.rag_batch_size)
+            embedding_endpoint: Ollama endpoint for embeddings (defaults to settings.rag_embedding_endpoint)
+            embedding_model: Embedding model name (defaults to settings.rag_embedding_model)
         """
         settings = get_settings()
         
-        self.storage_path = Path(storage_path or settings.rag_storage_path if hasattr(settings, 'rag_storage_path') else "data/rag")
-        self.batch_interval = batch_interval
-        self.batch_size_threshold = batch_size_threshold
+        # Use settings as defaults - server config is centralized in servers.yaml
+        self.storage_path = Path(storage_path or settings.rag_storage_path)
+        self.batch_interval = batch_interval if batch_interval is not None else settings.rag_batch_interval
+        self.batch_size_threshold = batch_size_threshold if batch_size_threshold is not None else settings.rag_batch_size
         
         # Queue storage
         self._queue_path = self.storage_path / "embedding_queue.json"
@@ -116,8 +117,8 @@ class EmbeddingTrigger:
         # Clients (lazy initialized)
         self._embedding_client: Optional[EmbeddingClient] = None
         self._vector_store: Optional[FileVectorStore] = None
-        self._embedding_endpoint = embedding_endpoint
-        self._embedding_model = embedding_model
+        self._embedding_endpoint = embedding_endpoint or settings.rag_embedding_endpoint
+        self._embedding_model = embedding_model or settings.rag_embedding_model
 
     def _load_queue(self) -> EmbeddingQueue:
         """Load queue from disk."""
@@ -358,15 +359,9 @@ class EmbeddingTrigger:
 # These are defined here to avoid circular imports with the main tasks module
 
 def _get_trigger() -> EmbeddingTrigger:
-    """Get embedding trigger instance."""
-    settings = get_settings()
-    return EmbeddingTrigger(
-        storage_path=settings.rag_storage_path if hasattr(settings, 'rag_storage_path') else "data/rag",
-        batch_interval=settings.rag_batch_interval if hasattr(settings, 'rag_batch_interval') else 300,
-        batch_size_threshold=settings.rag_batch_size if hasattr(settings, 'rag_batch_size') else 10,
-        embedding_endpoint=settings.rag_embedding_endpoint if hasattr(settings, 'rag_embedding_endpoint') else "http://192.168.1.12:11434",
-        embedding_model=settings.rag_embedding_model if hasattr(settings, 'rag_embedding_model') else "mxbai-embed-large:335m",
-    )
+    """Get embedding trigger instance using centralized settings."""
+    # All settings come from settings.py which references servers.yaml
+    return EmbeddingTrigger()
 
 
 def trigger_embedding_for_task(
