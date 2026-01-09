@@ -15,9 +15,11 @@ from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from src.api.dependencies import cleanup_dependencies, get_rate_limit_key
 from src.config.settings import get_settings
+from src.telemetry.config import configure_telemetry, shutdown_telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +37,25 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info(f"DATS API v{API_VERSION} starting up")
     settings = get_settings()
+    
+    # Configure OpenTelemetry
+    configure_telemetry(
+        service_name="dats-api",
+        service_version=API_VERSION,
+        additional_attributes={
+            "dats.component": "api",
+            "dats.api.host": settings.api_host,
+            "dats.api.port": settings.api_port,
+        },
+    )
+    
     logger.info(f"API running on {settings.api_host}:{settings.api_port}")
     
     yield
     
     # Shutdown
     logger.info("DATS API shutting down")
+    shutdown_telemetry()
     await cleanup_dependencies()
 
 
@@ -82,6 +97,12 @@ def create_app() -> FastAPI:
     
     # Register routes
     register_routes(app)
+    
+    # Instrument FastAPI with OpenTelemetry
+    FastAPIInstrumentor.instrument_app(
+        app,
+        excluded_urls="health,/,/api/docs,/api/redoc,/api/openapi.json",
+    )
     
     return app
 

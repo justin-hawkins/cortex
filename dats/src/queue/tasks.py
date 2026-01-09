@@ -11,10 +11,14 @@ from datetime import datetime
 from typing import Any, Optional
 
 from celery import Task
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode, SpanKind
 
 from src.queue.celery_app import app
 from src.storage.provenance import ProvenanceTracker
 from src.storage.work_product import WorkProductStore
+from src.telemetry.config import get_tracer
+from src.telemetry.context import extract_task_context, add_task_context
 
 logger = logging.getLogger(__name__)
 
@@ -191,26 +195,54 @@ def _execute_with_tier(task_data: dict[str, Any], tier: str) -> dict[str, Any]:
     task_type = task_data.get("type", "execute")
     domain = task_data.get("domain", "code-general")
     
-    logger.info(
-        f"Executing task {task_id} on tier {tier}",
-        extra={
-            "task_id": task_id,
-            "tier": tier,
-            "type": task_type,
-            "domain": domain,
+    # Extract trace context from task data for distributed tracing
+    parent_context = extract_task_context(task_data)
+    tracer = get_tracer("dats.queue.tasks")
+    
+    with tracer.start_as_current_span(
+        f"execute_task.{tier}",
+        context=parent_context,
+        kind=SpanKind.CONSUMER,
+        attributes={
+            "dats.task.id": task_id,
+            "dats.task.type": task_type,
+            "dats.task.tier": tier,
+            "dats.task.domain": domain,
         },
-    )
+    ) as span:
+        logger.info(
+            f"Executing task {task_id} on tier {tier}",
+            extra={
+                "task_id": task_id,
+                "tier": tier,
+                "type": task_type,
+                "domain": domain,
+            },
+        )
 
-    # Run async execution in sync context
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Run async execution in sync context
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-    result = loop.run_until_complete(_async_execute(task_data, tier))
-
-    return result
+        try:
+            result = loop.run_until_complete(_async_execute(task_data, tier))
+            span.set_status(Status(StatusCode.OK))
+            
+            # Add result info to span
+            if result.get("status") == "completed":
+                provenance = result.get("provenance", {})
+                span.set_attribute("dats.tokens.input", provenance.get("tokens_input", 0))
+                span.set_attribute("dats.tokens.output", provenance.get("tokens_output", 0))
+                span.set_attribute("dats.execution_time_ms", provenance.get("execution_time_ms", 0))
+            
+            return result
+        except Exception as e:
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.record_exception(e)
+            raise
 
 
 async def _async_execute(task_data: dict[str, Any], tier: str) -> dict[str, Any]:
@@ -240,6 +272,8 @@ async def _async_execute(task_data: dict[str, Any], tier: str) -> dict[str, Any]
     domain = task_data.get("domain", "code-general")
     project_id = task_data.get("project_id", "")
     description = task_data.get("description", "")
+    
+    tracer = get_tracer("dats.queue.tasks")
 
     logger.info(
         f"Starting task execution: {task_id}",
@@ -272,17 +306,24 @@ async def _async_execute(task_data: dict[str, Any], tier: str) -> dict[str, Any]
     try:
         # Step 1: Get RAG context
         rag_context = ""
-        try:
-            rag_engine = RAGQueryEngine()
-            rag_context = await rag_engine.get_context_for_worker(
-                task_data=task_data,
-                safe_working_limit=model_tier.safe_working_limit,
-                context_budget_ratio=0.3,
-            )
-            await rag_engine.close()
-        except Exception as e:
-            logger.warning(f"RAG context retrieval failed: {e}")
-            # Continue without RAG context
+        with tracer.start_as_current_span(
+            "rag.get_context",
+            attributes={"dats.task.id": task_id, "dats.task.domain": domain},
+        ) as rag_span:
+            try:
+                rag_engine = RAGQueryEngine()
+                rag_context = await rag_engine.get_context_for_worker(
+                    task_data=task_data,
+                    safe_working_limit=model_tier.safe_working_limit,
+                    context_budget_ratio=0.3,
+                )
+                await rag_engine.close()
+                rag_span.set_attribute("dats.rag.context_length", len(rag_context))
+                rag_span.set_status(Status(StatusCode.OK))
+            except Exception as e:
+                logger.warning(f"RAG context retrieval failed: {e}")
+                rag_span.set_status(Status(StatusCode.ERROR, str(e)))
+                # Continue without RAG context
 
         # Add RAG context to task data
         if rag_context:
@@ -292,7 +333,21 @@ async def _async_execute(task_data: dict[str, Any], tier: str) -> dict[str, Any]
         worker = _get_worker_for_domain(domain, tier)
 
         # Step 3: Execute with worker
-        worker_result = await worker.execute(task_data)
+        with tracer.start_as_current_span(
+            f"worker.{domain}.execute",
+            attributes={
+                "dats.task.id": task_id,
+                "dats.worker.domain": domain,
+                "dats.model.name": model_config.name,
+            },
+        ) as worker_span:
+            worker_result = await worker.execute(task_data)
+            
+            if worker_result.success:
+                worker_span.set_status(Status(StatusCode.OK))
+                worker_span.set_attribute("dats.worker.execution_time_ms", worker_result.execution_time_ms)
+            else:
+                worker_span.set_status(Status(StatusCode.ERROR, worker_result.error or "Unknown error"))
 
         if not worker_result.success:
             raise Exception(f"Worker execution failed: {worker_result.error}")

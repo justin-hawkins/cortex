@@ -13,11 +13,15 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
+from opentelemetry.trace import Status, StatusCode
+
 from src.agents.coordinator import Coordinator
 from src.agents.decomposer import Decomposer
 from src.agents.complexity_estimator import ComplexityEstimator
 from src.config.routing import get_routing_config
 from src.storage.provenance import ProvenanceTracker
+from src.telemetry.config import get_tracer
+from src.telemetry.context import add_task_context
 
 logger = logging.getLogger(__name__)
 
@@ -137,101 +141,158 @@ class AgentPipeline:
         started_at = datetime.utcnow()
         task_id = str(uuid.uuid4())
         project_id = project_id or str(uuid.uuid4())
+        
+        tracer = get_tracer("dats.pipeline")
 
         logger.info(
             f"Processing request: {user_request[:100]}...",
             extra={"task_id": task_id, "project_id": project_id},
         )
 
-        try:
-            # Step 1: Coordinator analyzes the request
-            coordination_result = await self._coordinate(
-                user_request=user_request,
-                task_id=task_id,
-                project_id=project_id,
-                context=context,
-            )
+        # Create the root span for the entire pipeline
+        with tracer.start_as_current_span(
+            "pipeline.process_request",
+            attributes={
+                "dats.task.id": task_id,
+                "dats.project.id": project_id,
+                "dats.request.length": len(user_request),
+            },
+        ) as pipeline_span:
+            try:
+                # Step 1: Coordinator analyzes the request
+                with tracer.start_as_current_span(
+                    "pipeline.coordinate",
+                    attributes={"dats.task.id": task_id},
+                ) as coord_span:
+                    coordination_result = await self._coordinate(
+                        user_request=user_request,
+                        task_id=task_id,
+                        project_id=project_id,
+                        context=context,
+                    )
+                    
+                    if coordination_result.get("success"):
+                        coord_span.set_attribute("dats.coordination.mode", coordination_result.get("mode", "unknown"))
+                        coord_span.set_attribute("dats.coordination.needs_decomposition", coordination_result.get("needs_decomposition", False))
+                        coord_span.set_status(Status(StatusCode.OK))
+                    else:
+                        coord_span.set_status(Status(StatusCode.ERROR, coordination_result.get("error", "Unknown error")))
 
-            if not coordination_result.get("success", False):
+                if not coordination_result.get("success", False):
+                    pipeline_span.set_status(Status(StatusCode.ERROR, "Coordination failed"))
+                    return PipelineResult(
+                        task_id=task_id,
+                        project_id=project_id,
+                        status=TaskStatus.FAILED,
+                        mode=TaskMode.UNKNOWN,
+                        error=coordination_result.get("error", "Coordination failed"),
+                        started_at=started_at,
+                        completed_at=datetime.utcnow(),
+                    )
+
+                mode = self._parse_mode(coordination_result.get("mode", "unknown"))
+                task_data = coordination_result.get("task_data", {})
+                task_data["id"] = task_id
+                task_data["project_id"] = project_id
+                task_data["description"] = user_request
+                
+                pipeline_span.set_attribute("dats.pipeline.mode", mode.value)
+
+                # Step 2: Check if decomposition is needed
+                needs_decomposition = coordination_result.get("needs_decomposition", False)
+
+                if needs_decomposition:
+                    # Step 3: Decompose the task
+                    with tracer.start_as_current_span(
+                        "pipeline.decompose",
+                        attributes={"dats.task.id": task_id},
+                    ) as decompose_span:
+                        subtasks = await self._decompose_recursive(task_data)
+                        decompose_span.set_attribute("dats.decomposition.subtask_count", len(subtasks) if subtasks else 0)
+                        
+                        if subtasks:
+                            decompose_span.set_status(Status(StatusCode.OK))
+                        else:
+                            decompose_span.set_status(Status(StatusCode.ERROR, "No subtasks produced"))
+
+                    if not subtasks:
+                        pipeline_span.set_status(Status(StatusCode.ERROR, "Decomposition failed"))
+                        return PipelineResult(
+                            task_id=task_id,
+                            project_id=project_id,
+                            status=TaskStatus.FAILED,
+                            mode=mode,
+                            error="Decomposition produced no subtasks",
+                            started_at=started_at,
+                            completed_at=datetime.utcnow(),
+                        )
+
+                    # Step 4: Estimate complexity and queue each subtask
+                    subtask_results = []
+                    with tracer.start_as_current_span(
+                        "pipeline.queue_subtasks",
+                        attributes={
+                            "dats.task.id": task_id,
+                            "dats.subtask.count": len(subtasks),
+                        },
+                    ):
+                        for subtask in subtasks:
+                            result = await self._estimate_and_queue(subtask)
+                            subtask_results.append(result)
+
+                    pipeline_span.set_attribute("dats.pipeline.subtasks_queued", len(subtask_results))
+                    pipeline_span.set_status(Status(StatusCode.OK))
+                    
+                    return PipelineResult(
+                        task_id=task_id,
+                        project_id=project_id,
+                        status=TaskStatus.QUEUED,
+                        mode=mode,
+                        subtasks=subtask_results,
+                        provenance_ids=[r.provenance_id for r in subtask_results if r.provenance_id],
+                        started_at=started_at,
+                        completed_at=datetime.utcnow(),
+                    )
+
+                else:
+                    # Simple task - estimate and queue directly
+                    with tracer.start_as_current_span(
+                        "pipeline.estimate_and_queue",
+                        attributes={"dats.task.id": task_id},
+                    ) as queue_span:
+                        result = await self._estimate_and_queue(task_data)
+                        queue_span.set_attribute("dats.task.tier", result.tier)
+                        queue_span.set_status(Status(StatusCode.OK) if result.status != TaskStatus.FAILED else Status(StatusCode.ERROR))
+
+                    pipeline_span.set_attribute("dats.pipeline.tier", result.tier)
+                    pipeline_span.set_status(Status(StatusCode.OK))
+                    
+                    return PipelineResult(
+                        task_id=task_id,
+                        project_id=project_id,
+                        status=result.status,
+                        mode=mode,
+                        tier=result.tier,
+                        output=result.output,
+                        artifacts=result.artifacts,
+                        provenance_ids=[result.provenance_id] if result.provenance_id else [],
+                        started_at=started_at,
+                        completed_at=datetime.utcnow(),
+                    )
+
+            except Exception as e:
+                logger.error(f"Pipeline error: {e}", extra={"task_id": task_id})
+                pipeline_span.set_status(Status(StatusCode.ERROR, str(e)))
+                pipeline_span.record_exception(e)
                 return PipelineResult(
                     task_id=task_id,
                     project_id=project_id,
                     status=TaskStatus.FAILED,
                     mode=TaskMode.UNKNOWN,
-                    error=coordination_result.get("error", "Coordination failed"),
+                    error=str(e),
                     started_at=started_at,
                     completed_at=datetime.utcnow(),
                 )
-
-            mode = self._parse_mode(coordination_result.get("mode", "unknown"))
-            task_data = coordination_result.get("task_data", {})
-            task_data["id"] = task_id
-            task_data["project_id"] = project_id
-            task_data["description"] = user_request
-
-            # Step 2: Check if decomposition is needed
-            needs_decomposition = coordination_result.get("needs_decomposition", False)
-
-            if needs_decomposition:
-                # Step 3: Decompose the task
-                subtasks = await self._decompose_recursive(task_data)
-
-                if not subtasks:
-                    return PipelineResult(
-                        task_id=task_id,
-                        project_id=project_id,
-                        status=TaskStatus.FAILED,
-                        mode=mode,
-                        error="Decomposition produced no subtasks",
-                        started_at=started_at,
-                        completed_at=datetime.utcnow(),
-                    )
-
-                # Step 4: Estimate complexity and queue each subtask
-                subtask_results = []
-                for subtask in subtasks:
-                    result = await self._estimate_and_queue(subtask)
-                    subtask_results.append(result)
-
-                return PipelineResult(
-                    task_id=task_id,
-                    project_id=project_id,
-                    status=TaskStatus.QUEUED,
-                    mode=mode,
-                    subtasks=subtask_results,
-                    provenance_ids=[r.provenance_id for r in subtask_results if r.provenance_id],
-                    started_at=started_at,
-                    completed_at=datetime.utcnow(),
-                )
-
-            else:
-                # Simple task - estimate and queue directly
-                result = await self._estimate_and_queue(task_data)
-
-                return PipelineResult(
-                    task_id=task_id,
-                    project_id=project_id,
-                    status=result.status,
-                    mode=mode,
-                    tier=result.tier,
-                    output=result.output,
-                    artifacts=result.artifacts,
-                    provenance_ids=[result.provenance_id] if result.provenance_id else [],
-                    started_at=started_at,
-                    completed_at=datetime.utcnow(),
-                )
-
-        except Exception as e:
-            logger.error(f"Pipeline error: {e}", extra={"task_id": task_id})
-            return PipelineResult(
-                task_id=task_id,
-                project_id=project_id,
-                status=TaskStatus.FAILED,
-                mode=TaskMode.UNKNOWN,
-                error=str(e),
-                started_at=started_at,
-                completed_at=datetime.utcnow(),
-            )
 
     async def _coordinate(
         self,
@@ -429,6 +490,9 @@ class AgentPipeline:
         from src.queue.tasks import execute_task
 
         task_id = task_data.get("id", str(uuid.uuid4()))
+        
+        # Add trace context to task data for distributed tracing
+        task_data = add_task_context(task_data)
 
         # Queue the task
         try:

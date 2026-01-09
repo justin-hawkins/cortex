@@ -5,6 +5,7 @@ Connects to RabbitMQ broker and configures queues for different model tiers.
 """
 
 from celery import Celery
+from celery.signals import worker_process_init, worker_process_shutdown
 
 from src.config.settings import get_settings
 
@@ -82,6 +83,32 @@ app.conf.task_routes = {
 app.conf.task_default_queue = "default"
 app.conf.task_default_exchange = "dats"
 app.conf.task_default_routing_key = "dats.default"
+
+
+# OpenTelemetry instrumentation for Celery workers
+@worker_process_init.connect(weak=False)
+def init_celery_tracing(*args, **kwargs):
+    """Initialize OpenTelemetry when a worker process starts."""
+    from opentelemetry.instrumentation.celery import CeleryInstrumentor
+    from src.telemetry.config import configure_telemetry
+    
+    # Configure telemetry for this worker
+    configure_telemetry(
+        service_name="dats-worker",
+        additional_attributes={
+            "dats.component": "celery-worker",
+        },
+    )
+    
+    # Instrument Celery
+    CeleryInstrumentor().instrument()
+
+
+@worker_process_shutdown.connect(weak=False)
+def shutdown_celery_tracing(*args, **kwargs):
+    """Shutdown OpenTelemetry when a worker process stops."""
+    from src.telemetry.config import shutdown_telemetry
+    shutdown_telemetry()
 
 
 if __name__ == "__main__":
