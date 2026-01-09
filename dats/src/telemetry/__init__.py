@@ -24,6 +24,18 @@ from src.telemetry.context import (
     inject_context,
     extract_context,
 )
+from src.telemetry.llm_tracer import (
+    LLMCallTracer,
+    LLMCallRecorder,
+    LLMCallInput,
+    LLMCallOutput,
+    llm_subsystem_context,
+    set_llm_context,
+    reset_llm_context,
+    get_current_subsystem,
+    get_current_task_id,
+    trace_llm_call_sync,
+)
 
 __all__ = [
     # Configuration
@@ -42,4 +54,15 @@ __all__ = [
     "get_current_span_id",
     "inject_context",
     "extract_context",
+    # LLM Call Tracing
+    "LLMCallTracer",
+    "LLMCallRecorder",
+    "LLMCallInput",
+    "LLMCallOutput",
+    "llm_subsystem_context",
+    "set_llm_context",
+    "reset_llm_context",
+    "get_current_subsystem",
+    "get_current_task_id",
+    "trace_llm_call_sync",
 ]

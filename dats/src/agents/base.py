@@ -17,6 +17,7 @@ from src.models.openai_client import OpenAICompatibleClient
 from src.models.anthropic_client import AnthropicClient
 from src.prompts.renderer import PromptRenderer
 from src.config.settings import get_settings
+from src.telemetry.llm_tracer import llm_subsystem_context
 
 logger = logging.getLogger(__name__)
 
@@ -201,14 +202,21 @@ class BaseAgent(ABC):
             # Render prompt
             prompt, prompt_version = self._render_prompt(task_data, context)
 
-            # Get model client and generate
-            client = self.get_model_client()
-            response = await client.generate(
-                prompt=prompt,
-                system_prompt=self._get_system_prompt(context),
-                temperature=self._get_temperature(),
-                max_tokens=self._get_max_tokens(context),
-            )
+            # Set LLM subsystem context for tracing
+            # This ensures all LLM calls are tagged with the agent name
+            with llm_subsystem_context(
+                subsystem=f"agent_{self.agent_name}",
+                task_id=context.task_id,
+            ):
+                # Get model client and generate
+                client = self.get_model_client()
+                response = await client.generate(
+                    prompt=prompt,
+                    system_prompt=self._get_system_prompt(context),
+                    temperature=self._get_temperature(),
+                    max_tokens=self._get_max_tokens(context),
+                    prompt_template=prompt_version,
+                )
 
             # Process response
             content = self._process_response(response, task_data)

@@ -10,6 +10,7 @@ from typing import AsyncIterator, Optional
 import httpx
 
 from src.models.base import BaseModelClient, ModelResponse
+from src.telemetry.llm_tracer import LLMCallTracer
 
 
 class OllamaClient(BaseModelClient):
@@ -36,6 +37,7 @@ class OllamaClient(BaseModelClient):
         super().__init__(endpoint, model_name)
         self.timeout = timeout
         self._client: Optional[httpx.AsyncClient] = None
+        self._llm_tracer = LLMCallTracer(provider="ollama", model=model_name)
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
@@ -56,6 +58,8 @@ class OllamaClient(BaseModelClient):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         stop_sequences: Optional[list[str]] = None,
+        prompt_template: Optional[str] = None,
+        context_items: int = 0,
     ) -> ModelResponse:
         """
         Generate a response using Ollama API.
@@ -66,43 +70,60 @@ class OllamaClient(BaseModelClient):
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
             stop_sequences: Optional stop sequences
+            prompt_template: Optional prompt template name/version for tracing
+            context_items: Number of RAG context items included (for tracing)
 
         Returns:
             ModelResponse with generated content
         """
-        client = await self._get_client()
+        # Use LLM tracer to capture full prompt/response telemetry
+        with self._llm_tracer.trace_call(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stop_sequences=stop_sequences,
+            prompt_template=prompt_template,
+            context_items=context_items,
+        ) as call_recorder:
+            client = await self._get_client()
 
-        payload = {
-            "model": self.model_name,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-            },
-        }
+            payload = {
+                "model": self.model_name,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": temperature,
+                    "num_predict": max_tokens,
+                },
+            }
 
-        if system_prompt:
-            payload["system"] = system_prompt
+            if system_prompt:
+                payload["system"] = system_prompt
 
-        if stop_sequences:
-            payload["options"]["stop"] = stop_sequences
+            if stop_sequences:
+                payload["options"]["stop"] = stop_sequences
 
-        response = await client.post(
-            f"{self.endpoint}/api/generate",
-            json=payload,
-        )
-        response.raise_for_status()
-        data = response.json()
+            response = await client.post(
+                f"{self.endpoint}/api/generate",
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
 
-        return ModelResponse(
-            content=data.get("response", ""),
-            tokens_input=data.get("prompt_eval_count", 0),
-            tokens_output=data.get("eval_count", 0),
-            model=data.get("model", self.model_name),
-            finish_reason=data.get("done_reason", "stop"),
-            raw_response=data,
-        )
+            model_response = ModelResponse(
+                content=data.get("response", ""),
+                tokens_input=data.get("prompt_eval_count", 0),
+                tokens_output=data.get("eval_count", 0),
+                model=data.get("model", self.model_name),
+                finish_reason=data.get("done_reason", "stop"),
+                raw_response=data,
+            )
+
+            # Record the response in telemetry
+            call_recorder.record_from_model_response(model_response)
+
+            return model_response
 
     async def generate_stream(
         self,

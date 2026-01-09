@@ -18,6 +18,7 @@ from src.models.openai_client import OpenAICompatibleClient
 from src.models.anthropic_client import AnthropicClient
 from src.prompts.renderer import PromptRenderer
 from src.config.settings import get_settings
+from src.telemetry.llm_tracer import llm_subsystem_context
 
 logger = logging.getLogger(__name__)
 
@@ -205,14 +206,28 @@ class BaseWorker:
             # Render prompt
             prompt, prompt_version = self._render_prompt(task_data, context)
 
-            # Get model client and generate
-            client = self.get_model_client(context.model_tier)
-            response = await client.generate(
-                prompt=prompt,
-                system_prompt=self._get_system_prompt(context),
-                temperature=self._get_temperature(),
-                max_tokens=self._get_max_tokens(context),
-            )
+            # Count RAG context items if present
+            context_items = 0
+            if task_data.get("lightrag_context"):
+                # Estimate context items by counting context sections
+                context_items = task_data.get("lightrag_context", "").count("---") + 1
+
+            # Set LLM subsystem context for tracing
+            # This ensures all LLM calls are tagged with the worker domain
+            with llm_subsystem_context(
+                subsystem=f"worker_{self.domain}",
+                task_id=context.task_id,
+            ):
+                # Get model client and generate
+                client = self.get_model_client(context.model_tier)
+                response = await client.generate(
+                    prompt=prompt,
+                    system_prompt=self._get_system_prompt(context),
+                    temperature=self._get_temperature(),
+                    max_tokens=self._get_max_tokens(context),
+                    prompt_template=prompt_version,
+                    context_items=context_items,
+                )
 
             # Process response
             content, artifacts = self._process_response(response, task_data)

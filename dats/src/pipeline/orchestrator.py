@@ -540,20 +540,9 @@ class AgentPipeline:
         try:
             result = await _async_execute(task_data, tier)
 
-            # Create provenance record
-            provenance = self._provenance.create_record(
-                task_id=task_id,
-                project_id=task_data.get("project_id", ""),
-                model_used=result.get("model", "unknown"),
-                worker_id=result.get("domain", "code-general"),
-            )
-
-            self._provenance.complete_record(
-                record_id=provenance.id,
-                outputs=result.get("output", {}).get("artifacts", []),
-                tokens_input=result.get("provenance", {}).get("tokens_input", 0),
-                tokens_output=result.get("provenance", {}).get("tokens_output", 0),
-            )
+            # Use provenance record created by _async_execute - don't create duplicate!
+            # The provenance ID is returned in the result
+            provenance_id = result.get("provenance", {}).get("id", "")
 
             return SubtaskResult(
                 subtask_id=task_id,
@@ -561,7 +550,7 @@ class AgentPipeline:
                 tier=tier,
                 output=result.get("output", {}).get("content", ""),
                 artifacts=result.get("output", {}).get("artifacts", []),
-                provenance_id=provenance.id,
+                provenance_id=provenance_id,
             )
 
         except Exception as e:

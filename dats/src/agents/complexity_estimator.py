@@ -8,6 +8,10 @@ import json
 from typing import Any, Optional
 
 from src.agents.base import BaseAgent, AgentContext
+from src.telemetry import get_tracer
+
+# Get tracer for complexity estimator spans
+tracer = get_tracer("dats.complexity_estimator")
 
 
 class ComplexityEstimator(BaseAgent):
@@ -126,28 +130,65 @@ Output a JSON object with:
         Returns:
             Complexity estimation
         """
-        result = await self.execute(task_data)
+        with tracer.start_as_current_span("estimator.estimate") as span:
+            task_id = task_data.get("id", "unknown")
+            description = task_data.get("description", "")
+            domain = task_data.get("domain", "code-general")
 
-        if result.success:
-            estimation = result.content
-            return {
-                "status": "estimated",
-                "task_id": task_data.get("id"),
-                "recommended_tier": estimation.get("recommended_tier", "small"),
-                "estimated_tokens": estimation.get("estimated_tokens", 5000),
-                "confidence": estimation.get("confidence", 0.5),
-                "reasoning": estimation.get("reasoning", ""),
-                "required_capabilities": estimation.get("required_capabilities", []),
-                "qa_profile": estimation.get("qa_profile", "consensus"),
-                "prompt_version": result.prompt_version,
-            }
-        else:
-            return {
-                "status": "error",
-                "task_id": task_data.get("id"),
-                "error": result.error,
-                # Default values on error
-                "recommended_tier": "small",
-                "estimated_tokens": 5000,
-                "confidence": 0.0,
-            }
+            # Record input event
+            span.set_attribute("dats.task.id", task_id)
+            span.set_attribute("dats.estimator.domain", domain)
+            span.set_attribute("dats.estimator.description_length", len(description))
+            span.add_event(
+                "estimator.input",
+                attributes={
+                    "task_id": task_id,
+                    "domain": domain,
+                    "description_preview": description[:500],  # Truncate for telemetry
+                }
+            )
+
+            result = await self.execute(task_data)
+
+            if result.success:
+                estimation = result.content
+                final_result = {
+                    "status": "estimated",
+                    "task_id": task_id,
+                    "recommended_tier": estimation.get("recommended_tier", "small"),
+                    "estimated_tokens": estimation.get("estimated_tokens", 5000),
+                    "confidence": estimation.get("confidence", 0.5),
+                    "reasoning": estimation.get("reasoning", ""),
+                    "required_capabilities": estimation.get("required_capabilities", []),
+                    "qa_profile": estimation.get("qa_profile", "consensus"),
+                    "prompt_version": result.prompt_version,
+                }
+            else:
+                final_result = {
+                    "status": "error",
+                    "task_id": task_id,
+                    "error": result.error,
+                    # Default values on error
+                    "recommended_tier": "small",
+                    "estimated_tokens": 5000,
+                    "confidence": 0.0,
+                }
+
+            # Record output event with estimation decision
+            span.set_attribute("dats.estimator.status", final_result["status"])
+            span.set_attribute("dats.estimator.recommended_tier", final_result["recommended_tier"])
+            span.set_attribute("dats.estimator.estimated_tokens", final_result["estimated_tokens"])
+            span.set_attribute("dats.estimator.confidence", final_result.get("confidence", 0.0))
+            span.add_event(
+                "estimator.output",
+                attributes={
+                    "status": final_result["status"],
+                    "recommended_tier": final_result["recommended_tier"],
+                    "estimated_tokens": str(final_result["estimated_tokens"]),
+                    "confidence": str(final_result.get("confidence", 0.0)),
+                    "qa_profile": final_result.get("qa_profile", "unknown"),
+                    "reasoning": final_result.get("reasoning", "")[:500],  # Truncate
+                }
+            )
+
+            return final_result

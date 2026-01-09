@@ -10,6 +10,7 @@ import anthropic
 import tiktoken
 
 from src.models.base import BaseModelClient, ModelResponse
+from src.telemetry.llm_tracer import LLMCallTracer
 
 
 class AnthropicClient(BaseModelClient):
@@ -39,6 +40,7 @@ class AnthropicClient(BaseModelClient):
         self.api_key = api_key
         self.timeout = timeout
         self._client: Optional[anthropic.AsyncAnthropic] = None
+        self._llm_tracer = LLMCallTracer(provider="anthropic", model=model_name)
 
         # Use tiktoken for token estimation (Claude uses similar tokenization)
         try:
@@ -72,6 +74,8 @@ class AnthropicClient(BaseModelClient):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         stop_sequences: Optional[list[str]] = None,
+        prompt_template: Optional[str] = None,
+        context_items: int = 0,
     ) -> ModelResponse:
         """
         Generate a response using Anthropic API.
@@ -82,41 +86,58 @@ class AnthropicClient(BaseModelClient):
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
             stop_sequences: Optional stop sequences
+            prompt_template: Optional prompt template name/version for tracing
+            context_items: Number of RAG context items included (for tracing)
 
         Returns:
             ModelResponse with generated content
         """
-        client = self._get_client()
+        # Use LLM tracer to capture full prompt/response telemetry
+        with self._llm_tracer.trace_call(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stop_sequences=stop_sequences,
+            prompt_template=prompt_template,
+            context_items=context_items,
+        ) as call_recorder:
+            client = self._get_client()
 
-        kwargs = {
-            "model": self.model_name,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "messages": [{"role": "user", "content": prompt}],
-        }
+            kwargs = {
+                "model": self.model_name,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "messages": [{"role": "user", "content": prompt}],
+            }
 
-        if system_prompt:
-            kwargs["system"] = system_prompt
+            if system_prompt:
+                kwargs["system"] = system_prompt
 
-        if stop_sequences:
-            kwargs["stop_sequences"] = stop_sequences
+            if stop_sequences:
+                kwargs["stop_sequences"] = stop_sequences
 
-        response = await client.messages.create(**kwargs)
+            response = await client.messages.create(**kwargs)
 
-        # Extract content from response
-        content = ""
-        for block in response.content:
-            if block.type == "text":
-                content += block.text
+            # Extract content from response
+            content = ""
+            for block in response.content:
+                if block.type == "text":
+                    content += block.text
 
-        return ModelResponse(
-            content=content,
-            tokens_input=response.usage.input_tokens,
-            tokens_output=response.usage.output_tokens,
-            model=response.model,
-            finish_reason=response.stop_reason or "stop",
-            raw_response=response.model_dump(),
-        )
+            model_response = ModelResponse(
+                content=content,
+                tokens_input=response.usage.input_tokens,
+                tokens_output=response.usage.output_tokens,
+                model=response.model,
+                finish_reason=response.stop_reason or "stop",
+                raw_response=response.model_dump(),
+            )
+
+            # Record the response in telemetry
+            call_recorder.record_from_model_response(model_response)
+
+            return model_response
 
     async def generate_stream(
         self,

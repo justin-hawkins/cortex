@@ -7,7 +7,13 @@ Responsible for overall task orchestration and workflow management.
 import json
 from typing import Any, Optional
 
+from opentelemetry import trace
+
 from src.agents.base import BaseAgent, AgentContext
+from src.telemetry import get_tracer
+
+# Get tracer for coordinator spans
+tracer = get_tracer("dats.coordinator")
 
 
 # Complexity thresholds for decomposition decisions
@@ -172,58 +178,97 @@ Always respond in structured JSON format when creating task plans."""
             - qa_profile: Recommended QA profile
             - acceptance_criteria: Extracted or generated acceptance criteria
         """
-        # Quick heuristic analysis before LLM call
-        quick_analysis = self._quick_analyze(user_request)
+        with tracer.start_as_current_span("coordinator.process_request") as span:
+            # Record input event with the user request
+            span.set_attribute("dats.coordinator.request_length", len(user_request))
+            span.set_attribute("dats.project.id", project_id)
+            span.add_event(
+                "coordinator.input",
+                attributes={
+                    "user_request": user_request[:2000],  # Truncate for telemetry
+                    "has_context": context is not None,
+                }
+            )
 
-        task_data = {
-            "description": user_request,
-            "project_id": project_id,
-            "inputs": [],
-        }
+            # Quick heuristic analysis before LLM call
+            with tracer.start_as_current_span("coordinator.quick_analyze") as quick_span:
+                quick_analysis = self._quick_analyze(user_request)
+                quick_span.set_attribute("dats.coordinator.quick_mode", quick_analysis["mode"])
+                quick_span.set_attribute("dats.coordinator.quick_domain", quick_analysis["domain"])
+                quick_span.set_attribute("dats.coordinator.quick_complexity", quick_analysis["complexity"])
+                quick_span.set_attribute("dats.coordinator.quick_needs_decomposition", quick_analysis["needs_decomposition"])
 
-        if context:
-            task_data["inputs"].append({
-                "type": "context",
-                "content": context,
-            })
-
-        # Call LLM for detailed analysis
-        result = await self.analyze_task(task_data)
-
-        if result.get("status") == "analyzed":
-            recommendation = result.get("recommendation", {})
-
-            # Merge quick analysis with LLM recommendation
-            return {
-                "success": True,
-                "mode": recommendation.get("mode", quick_analysis["mode"]),
-                "domain": recommendation.get("domain", quick_analysis["domain"]),
-                "needs_decomposition": recommendation.get(
-                    "needs_decomposition",
-                    quick_analysis["needs_decomposition"],
-                ),
-                "complexity": recommendation.get("complexity", quick_analysis["complexity"]),
-                "qa_profile": self._determine_qa_profile(
-                    recommendation.get("complexity", quick_analysis["complexity"]),
-                    recommendation.get("domain", quick_analysis["domain"]),
-                ),
-                "acceptance_criteria": recommendation.get("acceptance_criteria", ""),
+            task_data = {
+                "description": user_request,
+                "project_id": project_id,
+                "inputs": [],
             }
-        else:
-            # Fall back to quick analysis on error
-            return {
-                "success": True,
-                "mode": quick_analysis["mode"],
-                "domain": quick_analysis["domain"],
-                "needs_decomposition": quick_analysis["needs_decomposition"],
-                "complexity": quick_analysis["complexity"],
-                "qa_profile": self._determine_qa_profile(
-                    quick_analysis["complexity"],
-                    quick_analysis["domain"],
-                ),
-                "acceptance_criteria": "",
-                "warning": f"LLM analysis failed: {result.get('error')}. Using heuristics.",
-            }
+
+            if context:
+                task_data["inputs"].append({
+                    "type": "context",
+                    "content": context,
+                })
+
+            # Call LLM for detailed analysis
+            with tracer.start_as_current_span("coordinator.llm_analyze") as llm_span:
+                result = await self.analyze_task(task_data)
+                llm_span.set_attribute("dats.coordinator.analysis_status", result.get("status", "unknown"))
+
+            if result.get("status") == "analyzed":
+                recommendation = result.get("recommendation", {})
+
+                # Merge quick analysis with LLM recommendation
+                final_result = {
+                    "success": True,
+                    "mode": recommendation.get("mode", quick_analysis["mode"]),
+                    "domain": recommendation.get("domain", quick_analysis["domain"]),
+                    "needs_decomposition": recommendation.get(
+                        "needs_decomposition",
+                        quick_analysis["needs_decomposition"],
+                    ),
+                    "complexity": recommendation.get("complexity", quick_analysis["complexity"]),
+                    "qa_profile": self._determine_qa_profile(
+                        recommendation.get("complexity", quick_analysis["complexity"]),
+                        recommendation.get("domain", quick_analysis["domain"]),
+                    ),
+                    "acceptance_criteria": recommendation.get("acceptance_criteria", ""),
+                }
+            else:
+                # Fall back to quick analysis on error
+                final_result = {
+                    "success": True,
+                    "mode": quick_analysis["mode"],
+                    "domain": quick_analysis["domain"],
+                    "needs_decomposition": quick_analysis["needs_decomposition"],
+                    "complexity": quick_analysis["complexity"],
+                    "qa_profile": self._determine_qa_profile(
+                        quick_analysis["complexity"],
+                        quick_analysis["domain"],
+                    ),
+                    "acceptance_criteria": "",
+                    "warning": f"LLM analysis failed: {result.get('error')}. Using heuristics.",
+                }
+
+            # Record output event with the coordination decision
+            span.set_attribute("dats.coordinator.mode", final_result["mode"])
+            span.set_attribute("dats.coordinator.domain", final_result["domain"])
+            span.set_attribute("dats.coordinator.complexity", final_result["complexity"])
+            span.set_attribute("dats.coordinator.needs_decomposition", final_result["needs_decomposition"])
+            span.set_attribute("dats.coordinator.qa_profile", final_result["qa_profile"])
+            span.add_event(
+                "coordinator.output",
+                attributes={
+                    "mode": final_result["mode"],
+                    "domain": final_result["domain"],
+                    "complexity": final_result["complexity"],
+                    "needs_decomposition": str(final_result["needs_decomposition"]),
+                    "qa_profile": final_result["qa_profile"],
+                    "has_warning": "warning" in final_result,
+                }
+            )
+
+            return final_result
 
     def _quick_analyze(self, request: str) -> dict[str, Any]:
         """

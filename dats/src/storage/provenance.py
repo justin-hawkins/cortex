@@ -15,6 +15,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
+from src.telemetry import get_tracer
+
+# Get tracer for provenance spans
+tracer = get_tracer("dats.provenance")
+
 
 class VerificationStatus(str, Enum):
     """Verification status for provenance records."""
@@ -985,20 +990,38 @@ class ProvenanceTracker:
         Returns:
             New ProvenanceRecord
         """
-        record = ProvenanceRecord(
-            task_id=task_id,
-            project_id=project_id,
-            model_used=model_used,
-            worker_id=worker_id,
-            started_at=datetime.utcnow(),
-        )
-        self._records[record.id] = record
-        
-        # Invalidate graph cache
-        if self._graph:
-            self._graph.invalidate_cache()
+        with tracer.start_as_current_span("provenance.create_record") as span:
+            record = ProvenanceRecord(
+                task_id=task_id,
+                project_id=project_id,
+                model_used=model_used,
+                worker_id=worker_id,
+                started_at=datetime.utcnow(),
+            )
+            self._records[record.id] = record
             
-        return record
+            # Record provenance creation event
+            span.set_attribute("dats.provenance.id", record.id)
+            span.set_attribute("dats.task.id", task_id)
+            span.set_attribute("dats.project.id", project_id)
+            span.set_attribute("dats.provenance.model", model_used)
+            span.set_attribute("dats.provenance.worker", worker_id)
+            span.add_event(
+                "provenance.created",
+                attributes={
+                    "provenance_id": record.id,
+                    "task_id": task_id,
+                    "project_id": project_id,
+                    "model": model_used,
+                    "worker": worker_id,
+                }
+            )
+            
+            # Invalidate graph cache
+            if self._graph:
+                self._graph.invalidate_cache()
+                
+            return record
 
     def complete_record(
         self,
@@ -1021,40 +1044,63 @@ class ProvenanceTracker:
         Returns:
             Updated ProvenanceRecord
         """
-        record = self._records.get(record_id)
-        if not record:
-            raise ValueError(f"Record not found: {record_id}")
+        with tracer.start_as_current_span("provenance.complete_record") as span:
+            record = self._records.get(record_id)
+            if not record:
+                span.set_attribute("dats.provenance.error", "record_not_found")
+                raise ValueError(f"Record not found: {record_id}")
 
-        record.completed_at = datetime.utcnow()
-        
-        # Handle outputs - convert to ArtifactRef if possible
-        for output in outputs:
-            if isinstance(output, dict):
-                if "artifact_id" in output:
-                    record.outputs.append(ArtifactRef.from_dict(output))
-                else:
-                    record._legacy_outputs.append(output)
-        
-        record.tokens_input = tokens_input
-        record.tokens_output = tokens_output
-        record.metrics.tokens_input = tokens_input
-        record.metrics.tokens_output = tokens_output
-        record.confidence = confidence
+            record.completed_at = datetime.utcnow()
+            
+            # Handle outputs - convert to ArtifactRef if possible
+            artifact_ids = []
+            for output in outputs:
+                if isinstance(output, dict):
+                    if "artifact_id" in output:
+                        record.outputs.append(ArtifactRef.from_dict(output))
+                        artifact_ids.append(output["artifact_id"])
+                    else:
+                        record._legacy_outputs.append(output)
+            
+            record.tokens_input = tokens_input
+            record.tokens_output = tokens_output
+            record.metrics.tokens_input = tokens_input
+            record.metrics.tokens_output = tokens_output
+            record.confidence = confidence
 
-        if record.started_at and record.completed_at:
-            delta = record.completed_at - record.started_at
-            record.execution_time_ms = int(delta.total_seconds() * 1000)
-            record.metrics.execution_time_ms = record.execution_time_ms
+            if record.started_at and record.completed_at:
+                delta = record.completed_at - record.started_at
+                record.execution_time_ms = int(delta.total_seconds() * 1000)
+                record.metrics.execution_time_ms = record.execution_time_ms
 
-        # Persist if storage configured
-        if self.storage_path:
-            self._save_record(record)
+            # Record completion event
+            span.set_attribute("dats.provenance.id", record_id)
+            span.set_attribute("dats.task.id", record.task_id)
+            span.set_attribute("dats.provenance.artifact_count", len(artifact_ids))
+            span.set_attribute("dats.provenance.tokens_input", tokens_input)
+            span.set_attribute("dats.provenance.tokens_output", tokens_output)
+            span.set_attribute("dats.provenance.execution_time_ms", record.execution_time_ms or 0)
+            span.add_event(
+                "provenance.completed",
+                attributes={
+                    "provenance_id": record_id,
+                    "task_id": record.task_id,
+                    "artifact_count": str(len(artifact_ids)),
+                    "artifact_ids": ",".join(artifact_ids[:5]),  # First 5
+                    "tokens_total": str(tokens_input + tokens_output),
+                    "execution_time_ms": str(record.execution_time_ms or 0),
+                }
+            )
 
-        # Invalidate graph cache
-        if self._graph:
-            self._graph.invalidate_cache()
+            # Persist if storage configured
+            if self.storage_path:
+                self._save_record(record)
 
-        return record
+            # Invalidate graph cache
+            if self._graph:
+                self._graph.invalidate_cache()
+
+            return record
 
     def add_inputs(
         self,
@@ -1155,37 +1201,58 @@ class ProvenanceTracker:
         Returns:
             Updated ProvenanceRecord
         """
-        record = self._records.get(record_id)
-        if not record:
-            raise ValueError(f"Record not found: {record_id}")
+        with tracer.start_as_current_span("provenance.mark_tainted") as span:
+            record = self._records.get(record_id)
+            if not record:
+                span.set_attribute("dats.provenance.error", "record_not_found")
+                raise ValueError(f"Record not found: {record_id}")
 
-        record.taint.is_tainted = True
-        record.taint.tainted_at = datetime.utcnow()
-        record.taint.tainted_reason = reason
-        record.taint.tainted_by = source_id
-        record.taint.is_suspect = False  # Clear suspect if it was set
-        
-        record.verification.status = VerificationStatus.TAINTED
-        record.verification_status = "tainted"
+            record.taint.is_tainted = True
+            record.taint.tainted_at = datetime.utcnow()
+            record.taint.tainted_reason = reason
+            record.taint.tainted_by = source_id
+            record.taint.is_suspect = False  # Clear suspect if it was set
+            
+            record.verification.status = VerificationStatus.TAINTED
+            record.verification_status = "tainted"
 
-        # Log taint event
-        for artifact_id in record.get_output_artifact_ids():
-            event = TaintEvent(
-                artifact_id=artifact_id,
-                provenance_id=record_id,
-                reason=reason,
-                source_artifact_id=source_id,
-                cascade_depth=cascade_depth,
-                cascade_id=cascade_id or str(uuid.uuid4()),
-                action="taint",
+            # Log taint event
+            artifact_ids = record.get_output_artifact_ids()
+            for artifact_id in artifact_ids:
+                event = TaintEvent(
+                    artifact_id=artifact_id,
+                    provenance_id=record_id,
+                    reason=reason,
+                    source_artifact_id=source_id,
+                    cascade_depth=cascade_depth,
+                    cascade_id=cascade_id or str(uuid.uuid4()),
+                    action="taint",
+                )
+                self._taint_events.append(event)
+
+            # Record taint event in telemetry
+            span.set_attribute("dats.provenance.id", record_id)
+            span.set_attribute("dats.task.id", record.task_id)
+            span.set_attribute("dats.provenance.taint_reason", reason[:200])
+            span.set_attribute("dats.provenance.cascade_depth", cascade_depth)
+            span.set_attribute("dats.provenance.artifacts_affected", len(artifact_ids))
+            span.add_event(
+                "provenance.tainted",
+                attributes={
+                    "provenance_id": record_id,
+                    "task_id": record.task_id,
+                    "reason": reason[:500],
+                    "source_id": source_id,
+                    "cascade_depth": str(cascade_depth),
+                    "artifacts_affected": str(len(artifact_ids)),
+                }
             )
-            self._taint_events.append(event)
 
-        if self.storage_path:
-            self._save_record(record)
-            self._save_taint_events()
+            if self.storage_path:
+                self._save_record(record)
+                self._save_taint_events()
 
-        return record
+            return record
 
     def mark_suspect(
         self,
