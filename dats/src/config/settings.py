@@ -106,13 +106,13 @@ class Settings(BaseSettings):
 
     # Prompts Configuration
     prompts_dir: str = Field(
-        default="prompts",
+        default="dats/docs/prompts",
         description="Directory containing prompt templates",
     )
 
     # Routing Configuration
     routing_config_path: str = Field(
-        default="prompts/schemas/routing_config.yaml",
+        default="dats/docs/prompts/schemas/routing_config.yaml",
         description="Path to routing configuration YAML",
     )
 
