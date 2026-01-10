@@ -1,0 +1,85 @@
+# .clinerules
+# Cortex Project Rules for Cline AI Assistant
+
+## File Conventions
+
+### File Headers
+- Start each new file with a comment containing the file path and file name
+- Example: `# File: src/services/model-gateway/main.py`
+
+## Version Control Requirements
+
+### Commit Before Completion
+- Cline MUST NOT claim a task is "done" or "complete" without committing changes to GitHub
+- All actionable tasks require a git commit before marking as finished
+- Use `git status` to verify working tree is clean before claiming completion
+
+### Repository First
+- No new project can be started without first creating a GitHub repository
+- Exception: Prototyping/experimentation may use local-only versioning with `git init`
+- For prototypes, explicitly note "local versioning only - not pushed to remote"
+
+### Required Files
+- All projects MUST have a `.gitignore` file
+- If environment variables are needed, provide a `.env.example` with placeholder values
+
+## Architecture & Documentation
+
+### Architecture Decision Records (ADRs)
+- Any significant architecture decision must be documented in `docs/architecture/decisions/`
+- Follow the existing ADR format (see `001-repo-strategy.md` for template)
+- Number ADRs sequentially: `XXX-descriptive-name.md`
+
+### Service Documentation
+- New services must include a `README.md` with:
+  - Setup instructions
+  - API overview
+  - Dependencies
+  - Environment variables required
+
+## Code Quality
+
+### Python Standards
+- Include type hints for function parameters and return values
+- Follow PEP 8 style guidelines
+- Code must pass linting before committing
+
+### Testing
+- No feature is complete without corresponding tests
+- Tests go in `tests/` directory mirroring the source structure
+
+## Project Structure (per ADR-001)
+
+### Service Boundaries
+- New microservices go in `services/`
+- Shared code goes in `packages/dats-common/`
+- Deployment configs go in `deploy/`
+
+### Legacy Code
+- Do NOT modify code in `legacy/` without explicit approval
+- Legacy code is reference-only for migration purposes
+
+## Security
+
+### Secrets Management
+- NEVER commit API keys, passwords, tokens, or other secrets
+- Use `.env` files for secrets (already in .gitignore)
+- Review diffs before committing to catch accidental secret exposure
+
+## Git Workflow
+
+### Commit Messages
+- Use conventional commit format:
+  - `feat:` - New features
+  - `fix:` - Bug fixes
+  - `docs:` - Documentation changes
+  - `refactor:` - Code refactoring
+  - `test:` - Adding/updating tests
+  - `chore:` - Maintenance tasks
+
+### Branch Naming
+- Use descriptive branch names with prefixes:
+  - `feature/` - New features
+  - `bugfix/` - Bug fixes
+  - `docs/` - Documentation updates
+  - `refactor/` - Code refactoring
