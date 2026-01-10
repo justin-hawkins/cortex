@@ -1,264 +1,115 @@
+# File: docs/architecture/services/06-worker-service.md
 # Worker Service
 
-> **DATS Microservice** - Code Generation Execution  
-> Priority: P1  
-> Team: AI/ML  
-> Status: Planned
+> **Priority**: P1 | **Team**: AI/ML | **Status**: Planned
+>
+> Code generation execution via domain-specific workers.
+
+**Common patterns**: See [SERVICE_COMMON.md](../_shared/SERVICE_COMMON.md) for folder structure, Dockerfile, testing, and observability patterns.
 
 ---
 
-## Contract Specifications
+## Contracts
 
-| Type | Location | Description |
-|------|----------|-------------|
-| OpenAPI | `services/worker-service/contracts/openapi.yaml` | REST API specification (health, status) |
-| AsyncAPI | `services/worker-service/contracts/asyncapi.yaml` | Events (subscribes task.ready, publishes task.output.created) |
-
-See [Contract Guidelines](../contracts/README.md) for how to create and maintain contracts.
+| Type | Location |
+|------|----------|
+| OpenAPI | `services/worker-service/contracts/openapi.yaml` |
+| AsyncAPI | `services/worker-service/contracts/asyncapi.yaml` |
 
 ---
 
-## Folder Structure
-
-```
-services/worker-service/
-├── Dockerfile
-├── docker-compose.yml
-├── pyproject.toml
-├── requirements.txt
-├── Makefile
-├── README.md
-├── src/
-│   ├── __init__.py
-│   ├── main.py
-│   ├── config.py
-│   ├── routers/
-│   │   └── health.py
-│   ├── workers/
-│   │   ├── base.py
-│   │   ├── code_general.py
-│   │   ├── code_vision.py
-│   │   ├── code_embedded.py
-│   │   ├── documentation.py
-│   │   └── ui_design.py
-│   └── events/
-│       ├── handlers.py
-│       └── publisher.py
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── contract/
-├── config/
-└── contracts/
-    ├── openapi.yaml
-    └── asyncapi.yaml
-```
-
-See [ADR-001](../decisions/001-repo-strategy.md) for folder structure requirements.
-
----
-
-## Overview
-
-### Purpose
-
-The Worker Service executes code generation tasks:
+## Purpose
 
 - **Domain-Specific Workers**: code-general, code-vision, code-embedded, documentation, ui-design
 - **Context Integration**: Receives context from RAG Service
 - **Output Production**: Generates artifacts for QA validation
 
-### Current State (Monolith)
-
-```
-src/workers/
-├── __init__.py
-├── base.py           # BaseWorker
-├── code_general.py
-├── code_vision.py
-├── code_embedded.py
-├── documentation.py
-└── ui_design.py
-```
-
 ---
 
-## API Specification
+## API Endpoints
 
-> **Note**: Infrastructure endpoints (Model Gateway, RAG Service, RabbitMQ) are defined in 
-> [`servers.yaml`](../servers.yaml). This document references those centralized definitions.
-
-### Base URL
-
-```
-http://worker-service:8000/api/v1
-```
-
-### Endpoints
-
-#### POST /execute
+### POST /execute
 
 Execute a task (synchronous for small tasks).
 
-**Request:**
 ```json
-{
-  "task_id": "task-123",
-  "description": "Create fibonacci function",
-  "domain": "code-general",
-  "tier": "small",
-  "context": "## Previous Implementation\n...",
-  "project_id": "proj-456"
-}
+// Request
+{"task_id": "task-123", "description": "Create fibonacci function", "domain": "code-general", "tier": "small", "context": "..."}
+
+// Response
+{"task_id": "task-123", "artifact_id": "art-789", "status": "completed", "output": {"content": "def fibonacci..."}, "tokens_used": 450}
 ```
-
-**Response:**
-```json
-{
-  "task_id": "task-123",
-  "artifact_id": "art-789",
-  "status": "completed",
-  "output": {
-    "content": "def fibonacci(n)...",
-    "artifacts": [
-      {"type": "code", "language": "python", "path": "fibonacci.py"}
-    ]
-  },
-  "tokens_used": 450,
-  "execution_time_ms": 25000
-}
-```
-
-#### GET /health
-
-Health check with worker availability.
 
 ---
 
 ## Events
 
-### Subscribed Events
-
-| Event | Source | Action |
-|-------|--------|--------|
+| Subscribes | Source | Action |
+|------------|--------|--------|
 | `task.ready.{tier}` | Orchestration | Execute task |
 
-### Published Events
-
-| Event | Trigger | Data |
-|-------|---------|------|
-| `task.output.created` | Generation complete | `{task_id, artifact_id, output}` |
-| `task.failed` | Generation failed | `{task_id, error}` |
+| Publishes | Trigger |
+|-----------|---------|
+| `task.output.created` | Generation complete |
+| `task.failed` | Generation failed |
 
 ---
 
-## Architecture
+## Domain Workers
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     WORKER SERVICE                               │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌─────────────┐                                                │
-│  │  FastAPI    │◄─── HTTP (sync requests)                       │
-│  │  Router     │◄─── RabbitMQ (async tasks)                     │
-│  └──────┬──────┘                                                │
-│         │                                                        │
-│  ┌──────┴──────────────────────────────────────────────────┐   │
-│  │                  WORKER DISPATCHER                        │   │
-│  │  - Route to domain worker                                 │   │
-│  │  - Handle tier-based queuing                              │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                    DOMAIN WORKERS                         │   │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐              │   │
-│  │  │  Code    │  │  Code    │  │  Code    │              │   │
-│  │  │ General  │  │  Vision  │  │ Embedded │              │   │
-│  │  └──────────┘  └──────────┘  └──────────┘              │   │
-│  │  ┌──────────┐  ┌──────────┐                            │   │
-│  │  │  Docs    │  │   UI     │                            │   │
-│  │  │          │  │  Design  │                            │   │
-│  │  └──────────┘  └──────────┘                            │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌─────────────┐  ┌─────────────┐  ┌───────────────────┐       │
-│  │Model Gateway│  │ RAG Service │  │  Prompt Renderer  │       │
-│  │   Client    │  │   Client    │  │                   │       │
-│  └─────────────┘  └─────────────┘  └───────────────────┘       │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+| Worker | Description | Default Tier |
+|--------|-------------|--------------|
+| `code-general` | Standard code generation | small |
+| `code-vision` | Image/visual code | large |
+| `code-embedded` | Embedded systems | small |
+| `documentation` | Doc generation | small |
+| `ui-design` | UI components | large |
 
-### Configuration
+---
+
+## Configuration
 
 ```yaml
 # config/worker-service.yaml
-# NOTE: Server endpoints are defined in servers.yaml - this config references those definitions
-
 workers:
   code-general:
     prompt_template: workers/code_general.md
-    # Maps to gemma3:12b on ollama_gpu_general (from servers.yaml defaults.small_inference)
     default_tier: small
-    
   code-vision:
     prompt_template: workers/code_vision.md
-    # Maps to openai/gpt-oss-20b on vllm_gpu (from servers.yaml defaults.large_inference)
     default_tier: large
-    
-  code-embedded:
-    prompt_template: workers/code_embedded.md
-    default_tier: small
 
-# Tier-to-model mapping (from servers.yaml)
 tier_models:
-  tiny:
-    model: gemma3:4b
-    endpoint: ollama_gpu_general  # http://192.168.1.12:11434
-  small:
-    model: gemma3:12b
-    endpoint: ollama_gpu_general  # http://192.168.1.12:11434
-  large:
-    model: openai/gpt-oss-20b
-    endpoint: vllm_gpu            # http://192.168.1.11:8000/v1
-  coding:
-    model: qwen3-coder:30b-a3b-q8_0-64k
-    endpoint: ollama_cpu_large    # http://192.168.1.11:11434
-  frontier:
-    model: claude-sonnet-4-20250514
-    endpoint: anthropic           # https://api.anthropic.com/v1
+  tiny: {model: gemma3:4b, endpoint: ollama_gpu_general}
+  small: {model: gemma3:12b, endpoint: ollama_gpu_general}
+  large: {model: openai/gpt-oss-20b, endpoint: vllm_gpu}
+  coding: {model: qwen3-coder:30b-a3b-q8_0-64k, endpoint: ollama_cpu_large}
+  frontier: {model: claude-sonnet-4-20250514, endpoint: anthropic}
 
 queues:
-  tiny:
-    concurrency: 10
-    timeout_seconds: 60
-  small:
-    concurrency: 5
-    timeout_seconds: 120
-  large:
-    concurrency: 2
-    timeout_seconds: 300
-  frontier:
-    concurrency: 1
-    timeout_seconds: 600
+  tiny: {concurrency: 10, timeout: 60}
+  small: {concurrency: 5, timeout: 120}
+  large: {concurrency: 2, timeout: 300}
+  frontier: {concurrency: 1, timeout: 600}
+```
 
-model_gateway:
-  url: http://model-gateway:8000/api/v1
-  
-rag_service:
-  url: http://rag-service:8000/api/v1
+---
 
-events:
-  # From servers.yaml infrastructure.rabbitmq
-  rabbitmq:
-    host: 192.168.1.49
-    port: 5672
-    user: guest
-    password: guest
-    vhost: /
-    exchange: task.events
-    queue: worker-service-events
+## Migration Path
+
+1. **Week 1**: Create service, move workers from `src/workers/`
+2. **Week 2**: Add event handlers, Model Gateway + RAG integration
+3. Extract worker execution from `tasks.py`
+
+---
+
+## Environment Variables
+
+```bash
+MODEL_GATEWAY_URL=http://model-gateway:8000/api/v1
+RAG_SERVICE_URL=http://rag-service:8000/api/v1
+RABBITMQ_HOST=192.168.1.49
+PROMPTS_DIR=/app/prompts
 ```
 
 ---
@@ -269,7 +120,3 @@ events:
 - [ ] Zero lost tasks from queue
 - [ ] Output validates against schema
 - [ ] RAG context integration working
-
----
-
-*Last updated: January 2026*

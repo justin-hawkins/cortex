@@ -1,278 +1,108 @@
+# File: docs/architecture/services/05-agent-service.md
 # Agent Service
 
-> **DATS Microservice** - Task Analysis & Decomposition  
-> Priority: P1  
-> Team: AI/ML  
-> Status: Planned
+> **Priority**: P1 | **Team**: AI/ML | **Status**: Planned
+>
+> Task analysis, decomposition, and complexity estimation.
+
+**Common patterns**: See [SERVICE_COMMON.md](../_shared/SERVICE_COMMON.md) for folder structure, Dockerfile, testing, and observability patterns.
 
 ---
 
-## Contract Specifications
+## Contracts
 
-| Type | Location | Description |
-|------|----------|-------------|
-| OpenAPI | `services/agent-service/contracts/openapi.yaml` | REST API specification |
-| AsyncAPI | N/A | No events (stateless, uses Model Gateway) |
-
-See [Contract Guidelines](../contracts/README.md) for how to create and maintain contracts.
+| Type | Location |
+|------|----------|
+| OpenAPI | `services/agent-service/contracts/openapi.yaml` |
+| AsyncAPI | N/A (stateless, uses Model Gateway) |
 
 ---
 
-## Folder Structure
-
-```
-services/agent-service/
-├── Dockerfile
-├── docker-compose.yml
-├── pyproject.toml
-├── requirements.txt
-├── Makefile
-├── README.md
-├── src/
-│   ├── __init__.py
-│   ├── main.py
-│   ├── config.py
-│   ├── routers/
-│   │   ├── analyze.py
-│   │   ├── decompose.py
-│   │   ├── estimate.py
-│   │   └── health.py
-│   └── agents/
-│       ├── coordinator.py
-│       ├── decomposer.py
-│       └── complexity_estimator.py
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── contract/
-├── config/
-└── contracts/
-    └── openapi.yaml
-```
-
-See [ADR-001](../decisions/001-repo-strategy.md) for folder structure requirements.
-
----
-
-## Overview
-
-### Purpose
-
-The Agent Service provides intelligent task analysis capabilities:
+## Purpose
 
 - **Coordinator**: Analyze requests, determine mode (new_project, modify, fix_bug)
 - **Decomposer**: Break complex tasks into atomic subtasks
 - **Complexity Estimator**: Route tasks to appropriate model tier
 
-### Current State (Monolith)
-
-```
-src/agents/
-├── __init__.py
-├── base.py                # BaseAgent
-├── coordinator.py         # Coordinator
-├── decomposer.py          # Decomposer
-├── complexity_estimator.py
-├── qa_reviewer.py         # (→ QA Service)
-└── merge_coordinator.py   # (→ Worker Service)
-```
-
 ---
 
-## API Specification
+## API Endpoints
 
-> **Note**: Infrastructure endpoints (Model Gateway, RabbitMQ) are defined in 
-> [`servers.yaml`](../servers.yaml). This document references those centralized definitions.
-
-### Base URL
-
-```
-http://agent-service:8000/api/v1
-```
-
-### Endpoints
-
-#### POST /analyze
+### POST /analyze
 
 Analyze a task request.
 
-**Request:**
 ```json
-{
-  "request": "Create a Python function that calculates fibonacci numbers",
-  "project_id": "proj-123",
-  "context": {
-    "existing_files": ["utils.py", "tests/"],
-    "language": "python"
-  }
-}
+// Request
+{"request": "Create a Python fibonacci function", "project_id": "proj-123"}
+
+// Response
+{"mode": "new_project", "domain": "code-general", "needs_decomposition": false, "estimated_complexity": "small", "qa_profile": "consensus"}
 ```
 
-**Response:**
+### POST /decompose
+
+Decompose a complex task into subtasks.
+
 ```json
-{
-  "analysis_id": "ana-123",
-  "mode": "new_project",
-  "domain": "code-general",
-  "needs_decomposition": false,
-  "estimated_complexity": "small",
-  "acceptance_criteria": "Function should handle edge cases...",
-  "qa_profile": "consensus"
-}
+// Request
+{"task_id": "task-123", "description": "Build a REST API for user management", "max_depth": 5}
+
+// Response
+{"subtasks": [{"id": "sub-1", "description": "Create User model", "is_atomic": true, "dependencies": []}], "decomposition_depth": 1}
 ```
 
-#### POST /decompose
-
-Decompose a complex task.
-
-**Request:**
-```json
-{
-  "task_id": "task-123",
-  "description": "Build a REST API for user management",
-  "max_depth": 5
-}
-```
-
-**Response:**
-```json
-{
-  "parent_task_id": "task-123",
-  "subtasks": [
-    {
-      "id": "sub-1",
-      "description": "Create User model with validation",
-      "domain": "code-general",
-      "is_atomic": true,
-      "dependencies": []
-    },
-    {
-      "id": "sub-2",
-      "description": "Implement CRUD endpoints",
-      "domain": "code-general",
-      "is_atomic": true,
-      "dependencies": ["sub-1"]
-    }
-  ],
-  "decomposition_depth": 1
-}
-```
-
-#### POST /estimate
+### POST /estimate
 
 Estimate task complexity and route to tier.
 
-**Request:**
 ```json
-{
-  "task_id": "task-123",
-  "description": "Create fibonacci function",
-  "domain": "code-general"
-}
+// Request
+{"task_id": "task-123", "description": "Create fibonacci function", "domain": "code-general"}
+
+// Response
+{"recommended_tier": "small", "estimated_tokens": 500, "confidence": 0.85, "qa_profile": "consensus"}
 ```
-
-**Response:**
-```json
-{
-  "task_id": "task-123",
-  "recommended_tier": "small",
-  "estimated_tokens": 500,
-  "confidence": 0.85,
-  "reasoning": "Simple algorithmic task, limited context needed",
-  "qa_profile": "consensus"
-}
-```
-
-#### GET /health
-
-Health check.
 
 ---
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      AGENT SERVICE                               │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌─────────────┐                                                │
-│  │  FastAPI    │◄─── HTTP Requests                              │
-│  │  Router     │                                                │
-│  └──────┬──────┘                                                │
-│         │                                                        │
-│  ┌──────┴──────────────────────────────────────────────────┐   │
-│  │                      AGENTS                               │   │
-│  │  ┌────────────┐  ┌────────────┐  ┌──────────────────┐   │   │
-│  │  │Coordinator │  │ Decomposer │  │ComplexityEstimator│   │   │
-│  │  │            │  │            │  │                  │   │   │
-│  │  │ - Mode     │  │ - Recursive│  │ - Token estimate │   │   │
-│  │  │ - Domain   │  │ - Atomic   │  │ - Tier routing   │   │   │
-│  │  │ - QA prof  │  │ - DAG build│  │ - QA profile     │   │   │
-│  │  └────────────┘  └────────────┘  └──────────────────┘   │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                  MODEL GATEWAY CLIENT                     │   │
-│  │  - All LLM calls go through gateway                       │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                  PROMPT RENDERER                          │   │
-│  │  - Jinja2 templates from prompts/ directory              │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Configuration
+## Configuration
 
 ```yaml
 # config/agent-service.yaml
-# NOTE: Server endpoints are defined in servers.yaml - this config references those definitions
-
 agents:
   coordinator:
-    # Uses large tier - maps to openai/gpt-oss-20b on vllm_gpu (from servers.yaml)
-    preferred_tier: large
-    timeout_seconds: 60
-    
+    preferred_tier: large  # openai/gpt-oss-20b
   decomposer:
-    # Uses large tier for complex decomposition
     preferred_tier: large
     max_depth: 5
     max_subtasks: 20
-    
   complexity_estimator:
-    # Uses small tier - maps to gemma3:12b on ollama_gpu_general (from servers.yaml)
-    preferred_tier: small
-    timeout_seconds: 30
+    preferred_tier: small  # gemma3:12b
 
 prompts:
   templates_dir: /app/prompts
-  
+
 model_gateway:
   url: http://model-gateway:8000/api/v1
-
-# For direct LLM access (bypassing gateway during development)
-direct_llm:
-  ollama_gpu_general: http://192.168.1.12:11434  # gemma3 models
-  ollama_cpu_large: http://192.168.1.11:11434    # qwen3-coder models
-  vllm_gpu: http://192.168.1.11:8000/v1          # gpt-oss-20b
 ```
 
 ---
 
 ## Migration Path
 
-1. Create `services/agent-service/` directory
-2. Move agents from `src/agents/`:
-   - `coordinator.py`
-   - `decomposer.py`
-   - `complexity_estimator.py`
-   - `base.py`
-3. Update to use Model Gateway client
-4. Copy prompt templates to service
+1. **Week 1**: Create service, move agents from `src/agents/`
+2. **Week 2**: Update to use Model Gateway client
+3. Copy prompt templates to service
+
+---
+
+## Environment Variables
+
+```bash
+MODEL_GATEWAY_URL=http://model-gateway:8000/api/v1
+PROMPTS_DIR=/app/prompts
+```
 
 ---
 
@@ -282,7 +112,3 @@ direct_llm:
 - [ ] Decomposition produces valid DAG
 - [ ] Tier routing accuracy > 90%
 - [ ] Stateless and horizontally scalable
-
----
-
-*Last updated: January 2026*

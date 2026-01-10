@@ -169,61 +169,19 @@ This document defines the microservices architecture for DATS, transforming the 
 
 ## Service Definitions
 
-Each service has a dedicated design document:
+Each service has a dedicated design document. Common patterns (folder structure, Dockerfile, testing) are in [SERVICE_COMMON.md](_shared/SERVICE_COMMON.md).
 
-| Service | Document | Description |
-|---------|----------|-------------|
-| Model Gateway | [01-model-gateway.md](services/01-model-gateway.md) | Unified LLM interface |
-| RAG Service | [02-rag-service.md](services/02-rag-service.md) | Context retrieval & embedding |
-| Cascade Service | [03-cascade-service.md](services/03-cascade-service.md) | Failure propagation & rollback |
-| QA Service | [04-qa-service.md](services/04-qa-service.md) | Output validation & review |
-| Agent Service | [05-agent-service.md](services/05-agent-service.md) | Task analysis & decomposition |
-| Worker Service | [06-worker-service.md](services/06-worker-service.md) | Code generation execution |
-| Orchestration Service | [07-orchestration-service.md](services/07-orchestration-service.md) | Task lifecycle management |
+| Service | Document | Priority | Purpose |
+|---------|----------|----------|---------|
+| Model Gateway | [01-model-gateway.md](services/01-model-gateway.md) | P0 | Unified LLM interface |
+| RAG Service | [02-rag-service.md](services/02-rag-service.md) | P-DEFERRED | Context retrieval |
+| Cascade Service | [03-cascade-service.md](services/03-cascade-service.md) | P2 | Failure propagation |
+| QA Service | [04-qa-service.md](services/04-qa-service.md) | P2 | Output validation |
+| Agent Service | [05-agent-service.md](services/05-agent-service.md) | P1 | Task analysis |
+| Worker Service | [06-worker-service.md](services/06-worker-service.md) | P1 | Code generation |
+| Orchestration Service | [07-orchestration-service.md](services/07-orchestration-service.md) | P4 | Task lifecycle |
 
-### Service Summary
-
-#### Model Gateway (Priority: P0)
-- **Purpose**: Abstract LLM providers behind unified interface
-- **API**: `POST /generate`, `GET /models`, `GET /health`
-- **Stateless**: Yes
-- **Scales**: Horizontally
-
-#### RAG Service (Priority: P1)
-- **Purpose**: Context retrieval and embedding management
-- **API**: `POST /query`, `POST /embed`, `DELETE /embeddings/{id}`
-- **State**: LightRAG vector store
-- **Scales**: Vertically (GPU-bound)
-
-#### Cascade Service (Priority: P2)
-- **Purpose**: Taint propagation, revalidation, rollback
-- **API**: `POST /taint`, `GET /impact/{id}`, `POST /rollback`
-- **Subscribes**: `task.rejected`, `security.alert`
-- **Publishes**: `cascade.started`, `artifact.tainted`
-
-#### QA Service (Priority: P2)
-- **Purpose**: Output validation, human review
-- **API**: `POST /validate`, `GET /reviews/{id}`, `POST /approve`
-- **Subscribes**: `task.output.created`
-- **Publishes**: `task.validated`, `task.rejected`
-
-#### Agent Service (Priority: P3)
-- **Purpose**: Coordinator, Decomposer, Complexity Estimator
-- **API**: `POST /analyze`, `POST /decompose`, `POST /estimate`
-- **Stateless**: Yes (uses Model Gateway)
-- **Scales**: Horizontally
-
-#### Worker Service (Priority: P3)
-- **Purpose**: Execute code generation tasks
-- **Subscribes**: `task.ready.{tier}`
-- **Publishes**: `task.output.created`
-- **May Split**: By domain (code-general, code-vision, etc.)
-
-#### Orchestration Service (Priority: P4)
-- **Purpose**: Task lifecycle, routing, status
-- **API**: `POST /tasks`, `GET /tasks/{id}`, `POST /cancel`
-- **Publishes**: `task.created`, `task.ready`
-- **Subscribes**: `task.completed`, `task.failed`
+See individual service docs for API endpoints, events, configuration, and migration paths.
 
 ---
 

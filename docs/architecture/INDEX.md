@@ -2,8 +2,6 @@
 # DATS Architecture Documentation
 
 > **Distributed Agentic Task System** - Documentation Hub
-> 
-> Start here to navigate the architecture documentation.
 
 ---
 
@@ -11,9 +9,10 @@
 
 | Document | Description |
 |----------|-------------|
-| [Microservices Design](MICROSERVICES_DESIGN.md) | Overall architecture, service inventory, communication patterns |
-| [Service Definition of Done](SERVICE_DONE_DEFINITION.md) | What "done" means for service changes |
-| [servers.yaml](servers.yaml) | Infrastructure endpoints (Ollama, vLLM, RabbitMQ, Redis) |
+| [Microservices Design](MICROSERVICES_DESIGN.md) | Overall architecture, communication patterns |
+| [Service Common Patterns](_shared/SERVICE_COMMON.md) | Shared boilerplate for all services |
+| [Service Definition of Done](SERVICE_DONE_DEFINITION.md) | PR requirements for service changes |
+| [servers.yaml](servers.yaml) | Infrastructure endpoints |
 
 ---
 
@@ -64,59 +63,31 @@
 
 ---
 
-## 🗺️ Document Map
+## 🗺️ Document Structure
 
 ```
 docs/architecture/
-├── INDEX.md                          ← You are here
-├── MICROSERVICES_DESIGN.md           # Main architecture document
-├── SERVICE_DONE_DEFINITION.md        # Definition of done for services
-├── servers.yaml                      # Infrastructure endpoints
-│
-├── decisions/                        # Architecture Decision Records
-│   ├── 001-repo-strategy.md
-│   ├── 005-contract-strategy.md
-│   └── ...
-│
-├── services/                         # Individual service specifications
-│   ├── 01-model-gateway.md
-│   ├── 02-rag-service.md
-│   ├── 03-cascade-service.md
-│   ├── 04-qa-service.md
-│   ├── 05-agent-service.md
-│   ├── 06-worker-service.md
-│   └── 07-orchestration-service.md
-│
-├── contracts/                        # Service contracts
-│   ├── README.md
-│   ├── openapi/                      # REST API specs
-│   ├── asyncapi/                     # Event specs
-│   └── schemas/                      # Shared data schemas
-│
-└── prompts/                          # LLM prompt templates
-    ├── agents/
-    ├── workers/
-    └── schemas/
+├── INDEX.md                     ← You are here
+├── MICROSERVICES_DESIGN.md      # Main architecture
+├── SERVICE_DONE_DEFINITION.md   # PR requirements
+├── servers.yaml                 # Infrastructure endpoints
+├── _shared/
+│   └── SERVICE_COMMON.md        # Shared service patterns
+├── decisions/                   # ADRs
+├── services/                    # Per-service specs (reference _shared/)
+├── contracts/                   # OpenAPI/AsyncAPI specs
+└── prompts/                     # LLM prompt templates
 ```
 
 ---
 
-## 🚀 Quick Links by Role
+## 🚀 Quick Links
 
-### For New Team Members
-1. Read [MICROSERVICES_DESIGN.md](MICROSERVICES_DESIGN.md) for architecture overview
-2. Review [ADR-001](decisions/001-repo-strategy.md) for repo structure
-3. Check your team's service document in `services/`
-
-### For Developers
-1. Review [Service Definition of Done](SERVICE_DONE_DEFINITION.md) before submitting PRs
-2. Check [Contract Guidelines](contracts/README.md) for API contract requirements
-3. Reference [servers.yaml](servers.yaml) for infrastructure endpoints
-
-### For Architects
-1. ADRs in `decisions/` for architectural decisions
-2. Service docs in `services/` for detailed designs
-3. [MICROSERVICES_DESIGN.md](MICROSERVICES_DESIGN.md) for the big picture
+| Role | Start Here |
+|------|------------|
+| New Team Member | [MICROSERVICES_DESIGN.md](MICROSERVICES_DESIGN.md), then your team's service doc |
+| Developer | [SERVICE_DONE_DEFINITION.md](SERVICE_DONE_DEFINITION.md), [Contract Guidelines](contracts/README.md) |
+| Architect | [decisions/](decisions/) for ADRs, [MICROSERVICES_DESIGN.md](MICROSERVICES_DESIGN.md) |
 
 ---
 

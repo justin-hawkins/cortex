@@ -1,832 +1,163 @@
+# File: docs/architecture/services/01-model-gateway.md
 # Model Gateway Service
 
-> **DATS Microservice** - Unified LLM Interface  
-> Priority: P0 (First to Extract)  
-> Team: Platform  
-> Status: Planned
+> **Priority**: P0 (First to Extract) | **Team**: Platform | **Status**: Planned
+>
+> Unified LLM interface abstracting Ollama, OpenAI, Anthropic, and vLLM.
+
+**Common patterns**: See [SERVICE_COMMON.md](../_shared/SERVICE_COMMON.md) for folder structure, Dockerfile, testing, and observability patterns.
 
 ---
 
-## Contract Specifications
+## Contracts
 
-| Type | Location | Description |
-|------|----------|-------------|
-| OpenAPI | `services/model-gateway/contracts/openapi.yaml` | REST API specification |
-| AsyncAPI | N/A | No events (stateless service) |
-
-See [Contract Guidelines](../contracts/README.md) for how to create and maintain contracts.
+| Type | Location |
+|------|----------|
+| OpenAPI | `services/model-gateway/contracts/openapi.yaml` |
+| AsyncAPI | N/A (stateless service) |
 
 ---
 
-## Folder Structure
+## Purpose
 
-```
-services/model-gateway/
-├── Dockerfile                 # Self-contained build
-├── docker-compose.yml         # Local dev with dependencies
-├── pyproject.toml             # Dependencies (references dats-common)
-├── requirements.txt           # Locked deps for reproducible builds
-├── Makefile                   # build, test, lint, contract-test
-├── README.md                  # Setup instructions
-├── src/
-│   ├── __init__.py
-│   ├── main.py                # FastAPI app
-│   ├── config.py              # Settings
-│   ├── routers/
-│   │   ├── generate.py
-│   │   ├── models.py
-│   │   └── health.py
-│   ├── providers/
-│   │   ├── base.py
-│   │   ├── ollama.py
-│   │   ├── anthropic.py
-│   │   └── openai.py
-│   └── services/
-│       ├── router.py          # Model routing logic
-│       ├── rate_limiter.py
-│       └── failover.py
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── contract/              # OpenAPI compliance tests
-├── config/
-│   └── model-gateway.yaml
-└── contracts/
-    └── openapi.yaml           # REST API contract
-```
-
-See [ADR-001](../decisions/001-repo-strategy.md) for folder structure requirements.
-
----
-
-## Overview
-
-### Purpose
-
-The Model Gateway Service provides a unified interface for all LLM interactions across DATS. It abstracts provider-specific implementations (Ollama, OpenAI, Anthropic, vLLM) behind a consistent API, enabling:
-
+Abstracts LLM providers behind a consistent API:
 - **Provider Agnosticism**: Switch models without changing client code
-- **Rate Limiting**: Centralized request throttling
+- **Rate Limiting**: Centralized request throttling (Redis-backed)
 - **Failover**: Automatic fallback to backup models
-- **Observability**: Unified tracing for all LLM calls
 - **Cost Tracking**: Centralized token usage metrics
 
-### Current State (Monolith)
-
-```
-src/models/
-├── base.py              # BaseModelClient abstract class
-├── ollama_client.py     # Ollama API wrapper
-├── openai_client.py     # OpenAI/vLLM wrapper
-├── anthropic_client.py  # Anthropic wrapper
-└── mock_client.py       # Testing mock
-```
-
-**Problems:**
-- Each agent/worker imports clients directly
-- No centralized rate limiting
-- No automatic failover
-- Duplicate tracing setup in each client
-
 ---
 
-## API Specification
+## API Endpoints
 
-> **Note**: Infrastructure endpoints (Ollama, vLLM, RabbitMQ, Redis) are defined in 
-> [`servers.yaml`](../servers.yaml). This document references those centralized definitions.
-
-### Base URL
-
-```
-http://model-gateway:8000/api/v1
-```
-
-### Endpoints
-
-#### POST /generate
+### POST /generate
 
 Generate text completion from an LLM.
 
-**Request:**
 ```json
+// Request
 {
   "model": "gemma3:12b",
   "prompt": "Write a Python function...",
   "system_prompt": "You are an expert developer.",
   "temperature": 0.7,
   "max_tokens": 2000,
-  "stop_sequences": ["```"],
-  "metadata": {
-    "task_id": "abc123",
-    "agent": "code_general",
-    "tier": "small"
-  }
+  "metadata": {"task_id": "abc123"}
 }
-```
 
-**Response:**
-```json
+// Response
 {
-  "id": "gen-550e8400-e29b-41d4-a716-446655440000",
+  "id": "gen-550e8400-...",
   "model": "gemma3:12b",
   "provider": "ollama",
   "content": "def fibonacci(n: int) -> int:\n    ...",
   "tokens_input": 150,
   "tokens_output": 200,
   "latency_ms": 1250,
-  "finish_reason": "stop",
-  "metadata": {
-    "task_id": "abc123",
-    "trace_id": "d81215d87cd927d7"
-  }
+  "finish_reason": "stop"
 }
 ```
 
-**Error Response:**
-```json
-{
-  "error": {
-    "code": "MODEL_UNAVAILABLE",
-    "message": "Model gemma3:12b is not available",
-    "details": {
-      "provider": "ollama",
-      "attempted_fallbacks": ["gemma3:4b"],
-      "trace_id": "d81215d87cd927d7"
-    }
-  }
-}
-```
+### GET /models
 
-#### GET /models
+List available models with status, tier, and capabilities.
 
-List available models and their status.
-
-**Response:**
-```json
-{
-  "models": [
-    {
-      "name": "gemma3:4b",
-      "provider": "ollama",
-      "tier": "tiny",
-      "status": "available",
-      "context_window": 32768,
-      "capabilities": ["text-generation"],
-      "endpoint": "ollama_gpu_general"
-    },
-    {
-      "name": "gemma3:12b",
-      "provider": "ollama",
-      "tier": "small",
-      "status": "available",
-      "context_window": 32768,
-      "capabilities": ["text-generation"],
-      "endpoint": "ollama_gpu_general"
-    },
-    {
-      "name": "qwen3-coder:30b-a3b-q8_0-64k",
-      "provider": "ollama",
-      "tier": "coding",
-      "status": "available",
-      "context_window": 65536,
-      "capabilities": ["text-generation", "code"],
-      "endpoint": "ollama_cpu_large"
-    },
-    {
-      "name": "openai/gpt-oss-20b",
-      "provider": "vllm",
-      "tier": "large",
-      "status": "available",
-      "context_window": 32768,
-      "capabilities": ["text-generation"],
-      "endpoint": "vllm_gpu"
-    },
-    {
-      "name": "claude-sonnet-4-20250514",
-      "provider": "anthropic",
-      "tier": "frontier",
-      "status": "available",
-      "context_window": 200000,
-      "capabilities": ["text-generation", "vision"]
-    },
-    {
-      "name": "mxbai-embed-large:335m",
-      "provider": "ollama",
-      "tier": "embedding",
-      "status": "available",
-      "context_window": 512,
-      "capabilities": ["embedding"],
-      "endpoint": "ollama_gpu_general"
-    }
-  ]
-}
-```
-
-#### GET /models/{name}
+### GET /models/{name}
 
 Get detailed info for a specific model.
 
-#### GET /health
+---
 
-Health check endpoint.
+## Configuration
 
-**Response:**
-```json
-{
-  "status": "healthy",
-  "version": "1.0.0",
-  "providers": {
-    "ollama_cpu_large": {
-      "status": "connected",
-      "endpoint": "http://192.168.1.11:11434",
-      "mode": "cpu",
-      "models_available": 2,
-      "description": "AMD Epyc 32-core 7532 with 2x RTX5060Ti 16GB"
-    },
-    "ollama_gpu_general": {
-      "status": "connected",
-      "endpoint": "http://192.168.1.12:11434",
-      "mode": "gpu",
-      "models_available": 10,
-      "description": "2x RTX4060Ti 16GB"
-    },
-    "vllm_gpu": {
-      "status": "connected",
-      "endpoint": "http://192.168.1.11:8000/v1",
-      "mode": "gpu",
-      "models_available": 1
-    },
-    "anthropic": {
-      "status": "connected",
-      "endpoint": "https://api.anthropic.com/v1",
-      "rate_limit_remaining": 950
-    }
-  }
-}
+```yaml
+# config/model-gateway.yaml
+providers:
+  ollama:
+    endpoints:
+      - name: ollama_cpu_large
+        host: http://192.168.1.11:11434
+        mode: cpu
+        models: [qwen3-coder:30b-a3b-q8_0-64k]
+      - name: ollama_gpu_general
+        host: http://192.168.1.12:11434
+        mode: gpu
+        models: [gemma3:4b, gemma3:12b, mxbai-embed-large:335m]
+  anthropic:
+    endpoint: https://api.anthropic.com/v1
+    rate_limit: {requests_per_minute: 60}
+  vllm:
+    endpoint: http://192.168.1.11:8000/v1
+    models: [openai/gpt-oss-20b]
+
+model_aliases:
+  tiny: gemma3:4b
+  small: gemma3:12b
+  large: openai/gpt-oss-20b
+  frontier: claude-sonnet-4-20250514
+  coding: qwen3-coder:30b-a3b-q8_0-64k
+  embedding: mxbai-embed-large:335m
+
+failover:
+  strategies: [same_tier, tier_up, provider_fallback]
 ```
-
-#### GET /metrics
-
-Prometheus-compatible metrics.
 
 ---
 
 ## Data Models
 
-### GenerateRequest
-
 ```python
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
-
 class GenerateRequest(BaseModel):
-    """Request to generate text from an LLM."""
-    
-    model: str = Field(..., description="Model name or alias")
-    prompt: str = Field(..., description="User prompt")
-    system_prompt: Optional[str] = Field(None, description="System prompt")
+    model: str
+    prompt: str
+    system_prompt: Optional[str] = None
     temperature: float = Field(0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(2000, ge=1, le=100000)
     stop_sequences: Optional[List[str]] = None
-    metadata: Optional[Dict[str, Any]] = Field(
-        default_factory=dict,
-        description="Pass-through metadata for tracing"
-    )
-    
-    # Advanced options
-    top_p: Optional[float] = Field(None, ge=0.0, le=1.0)
-    frequency_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0)
-    presence_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0)
-```
+    metadata: Optional[Dict[str, Any]] = None
 
-### GenerateResponse
-
-```python
 class GenerateResponse(BaseModel):
-    """Response from LLM generation."""
-    
-    id: str = Field(..., description="Unique generation ID")
-    model: str = Field(..., description="Model used")
-    provider: str = Field(..., description="Provider (ollama, anthropic, etc.)")
-    content: str = Field(..., description="Generated text")
-    tokens_input: int = Field(..., description="Input token count")
-    tokens_output: int = Field(..., description="Output token count")
-    latency_ms: int = Field(..., description="Generation latency")
-    finish_reason: str = Field(..., description="Why generation stopped")
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-```
-
-### ModelInfo
-
-```python
-class ModelInfo(BaseModel):
-    """Information about an available model."""
-    
-    name: str
+    id: str
+    model: str
     provider: str
-    tier: str  # tiny, small, large, frontier
-    status: str  # available, unavailable, rate_limited
-    context_window: int
-    capabilities: List[str]
-    rate_limit: Optional[dict] = None
+    content: str
+    tokens_input: int
+    tokens_output: int
+    latency_ms: int
+    finish_reason: str
+    metadata: Dict[str, Any] = {}
 ```
 
 ---
 
-## Architecture
+## Client (dats-common)
 
-### Internal Components
+```python
+from dats_common.clients.model_gateway import ModelGatewayClient
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     MODEL GATEWAY SERVICE                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌─────────────┐                                                │
-│  │  FastAPI    │◄─── HTTP Requests from other services          │
-│  │  Router     │                                                │
-│  └──────┬──────┘                                                │
-│         │                                                        │
-│  ┌──────▼──────┐                                                │
-│  │   Request   │  - Validate request                            │
-│  │  Validator  │  - Resolve model aliases                       │
-│  └──────┬──────┘                                                │
-│         │                                                        │
-│  ┌──────▼──────┐                                                │
-│  │    Rate     │  - Per-model rate limiting                     │
-│  │   Limiter   │  - Per-provider rate limiting                  │
-│  └──────┬──────┘                                                │
-│         │                                                        │
-│  ┌──────▼──────┐                                                │
-│  │   Router    │  - Select provider for model                   │
-│  │   Logic     │  - Handle failover                             │
-│  └──────┬──────┘                                                │
-│         │                                                        │
-│  ┌──────┴──────────────────────────────────────────────────┐   │
-│  │                   PROVIDER CLIENTS                        │   │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │   │
-│  │  │  Ollama  │  │  OpenAI  │  │Anthropic │  │   vLLM   │ │   │
-│  │  │  Client  │  │  Client  │  │  Client  │  │  Client  │ │   │
-│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │                    OBSERVABILITY                         │    │
-│  │  - OpenTelemetry tracing                                 │    │
-│  │  - Prometheus metrics                                    │    │
-│  │  - Structured logging                                    │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Configuration
-
-```yaml
-# config/model-gateway.yaml
-# NOTE: Server endpoints are defined in servers.yaml - this config references those definitions
-
-providers:
-  ollama:
-    enabled: true
-    endpoints:
-      # CPU server for high-precision coding models
-      - name: ollama_cpu_large
-        host: http://192.168.1.11:11434
-        mode: cpu
-        priority: 1
-        models: 
-          - qwen3-coder:30b-a3b-q8_0-64k
-          - qwen3-coder:30b-a3b-fp16-64k
-      # GPU server for general inference and embeddings
-      - name: ollama_gpu_general
-        host: http://192.168.1.12:11434
-        mode: gpu
-        priority: 2
-        models:
-          - gemma3:4b
-          - gemma3:12b
-          - gemma3:27b
-          - gpt-oss:20b
-          - mxbai-embed-large:335m
-          - qwen3-4b-m32k:latest
-          - qwen3-coder:30b
-          - qwen3-coder:30b-32k
-          - qwen3-coder:30b-64k
-    timeout_seconds: 120
-    
-  anthropic:
-    enabled: true
-    endpoint: https://api.anthropic.com/v1
-    api_key_env: ANTHROPIC_API_KEY
-    rate_limit:
-      requests_per_minute: 60
-      tokens_per_minute: 100000
-    
-  vllm:
-    enabled: true
-    endpoint: http://192.168.1.11:8000/v1
-    mode: gpu
-    models: 
-      - openai/gpt-oss-20b
-
-# Model aliases map to servers.yaml defaults
-model_aliases:
-  # Tier-based aliases (from servers.yaml defaults)
-  tiny: gemma3:4b                           # → ollama_gpu_general
-  small: gemma3:12b                         # → ollama_gpu_general
-  large: openai/gpt-oss-20b                 # → vllm_gpu
-  frontier: claude-sonnet-4-20250514        # → anthropic
-  
-  # Capability-based aliases (from servers.yaml defaults)
-  coding: qwen3-coder:30b-a3b-q8_0-64k      # → ollama_cpu_large
-  coding_high_precision: qwen3-coder:30b-a3b-fp16-64k  # → ollama_cpu_large
-  embedding: mxbai-embed-large:335m         # → ollama_gpu_general
-
-failover:
-  enabled: true
-  strategies:
-    - type: same_tier
-      description: Try another model in same tier
-    - type: tier_up
-      description: Escalate to higher tier
-    - type: provider_fallback
-      description: Try same model on different provider
-
-rate_limiting:
-  enabled: true
-  default_rpm: 100
-  default_tpm: 50000
-  per_model: {}
+client = ModelGatewayClient()
+response = await client.generate(model="small", prompt="Hello")
+models = await client.list_models()
 ```
 
 ---
 
 ## Migration Path
 
-### Phase 1: Extract Clients (Week 1)
-
-1. Create `services/model-gateway/` directory structure:
-   ```
-   services/model-gateway/
-   ├── Dockerfile
-   ├── requirements.txt
-   ├── src/
-   │   ├── __init__.py
-   │   ├── main.py          # FastAPI app
-   │   ├── config.py        # Settings
-   │   ├── routers/
-   │   │   ├── __init__.py
-   │   │   ├── generate.py
-   │   │   ├── models.py
-   │   │   └── health.py
-   │   ├── providers/
-   │   │   ├── __init__.py
-   │   │   ├── base.py
-   │   │   ├── ollama.py
-   │   │   ├── anthropic.py
-   │   │   └── openai.py
-   │   ├── services/
-   │   │   ├── __init__.py
-   │   │   ├── router.py    # Model routing logic
-   │   │   ├── rate_limiter.py
-   │   │   └── failover.py
-   │   └── models/
-   │       ├── __init__.py
-   │       ├── requests.py
-   │       └── responses.py
-   └── tests/
-   ```
-
-2. Copy existing client code from `src/models/`:
-   - `ollama_client.py` → `providers/ollama.py`
-   - `anthropic_client.py` → `providers/anthropic.py`
-   - `openai_client.py` → `providers/openai.py`
-
-3. Adapt clients to use shared interface
-
-### Phase 2: Create HTTP Client (Week 2)
-
-Add to `dats-common`:
-
-```python
-# dats_common/clients/model_gateway.py
-import httpx
-from typing import Optional, Dict, Any
-
-class ModelGatewayClient:
-    """Client for Model Gateway Service."""
-    
-    def __init__(
-        self,
-        base_url: str = "http://model-gateway:8000/api/v1",
-        timeout: float = 120.0,
-    ):
-        self.base_url = base_url
-        self.client = httpx.AsyncClient(timeout=timeout)
-    
-    async def generate(
-        self,
-        model: str,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        """Generate text from an LLM."""
-        response = await self.client.post(
-            f"{self.base_url}/generate",
-            json={
-                "model": model,
-                "prompt": prompt,
-                "system_prompt": system_prompt,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                **kwargs,
-            },
-        )
-        response.raise_for_status()
-        return response.json()
-    
-    async def list_models(self) -> Dict[str, Any]:
-        """List available models."""
-        response = await self.client.get(f"{self.base_url}/models")
-        response.raise_for_status()
-        return response.json()
-    
-    async def health(self) -> Dict[str, Any]:
-        """Check service health."""
-        response = await self.client.get(f"{self.base_url}/health")
-        response.raise_for_status()
-        return response.json()
-    
-    async def close(self):
-        """Close the HTTP client."""
-        await self.client.aclose()
-```
-
-### Phase 3: Update Consumers (Week 3)
-
-Update `src/agents/base.py` to use the client:
-
-```python
-# Before (direct import)
-from src.models.ollama_client import OllamaClient
-client = OllamaClient(...)
-response = await client.generate(prompt)
-
-# After (gateway client)
-from dats_common.clients.model_gateway import ModelGatewayClient
-client = ModelGatewayClient()
-response = await client.generate(model="small", prompt=prompt)
-```
-
-### Phase 4: Deploy & Switch (Week 4)
-
-1. Deploy Model Gateway as Docker container
-2. Configure environment variable: `MODEL_GATEWAY_URL`
-3. Feature flag: `USE_MODEL_GATEWAY=true`
-4. Gradual rollout: 10% → 50% → 100%
-5. Remove direct client imports from monolith
-
----
-
-## Dockerfile
-
-```dockerfile
-FROM python:3.11-slim
-
-WORKDIR /app
-
-# Install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy dats-common
-COPY dats-common /tmp/dats-common
-RUN pip install /tmp/dats-common
-
-# Copy application
-COPY src/ ./src/
-COPY config/ ./config/
-
-# Environment
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/api/v1/health || exit 1
-
-# Run
-EXPOSE 8000
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
----
-
-## Observability
-
-### Traces
-
-All requests are traced with OpenTelemetry:
-
-```python
-@app.middleware("http")
-async def tracing_middleware(request: Request, call_next):
-    tracer = get_tracer("model-gateway")
-    with tracer.start_as_current_span(
-        f"generate.{request.state.model}",
-        attributes={
-            "model.name": request.state.model,
-            "model.provider": request.state.provider,
-            "request.tokens_estimate": len(request.state.prompt) // 4,
-        },
-    ) as span:
-        response = await call_next(request)
-        span.set_attribute("response.tokens_output", response.tokens_output)
-        return response
-```
-
-### Metrics (Prometheus)
-
-```
-# Request counts
-model_gateway_requests_total{model="gemma3:12b", provider="ollama", status="success"}
-model_gateway_requests_total{model="gemma3:12b", provider="ollama", status="error"}
-
-# Latency histogram
-model_gateway_latency_seconds{model="gemma3:12b", provider="ollama", quantile="0.5"}
-model_gateway_latency_seconds{model="gemma3:12b", provider="ollama", quantile="0.95"}
-
-# Token counts
-model_gateway_tokens_total{model="gemma3:12b", direction="input"}
-model_gateway_tokens_total{model="gemma3:12b", direction="output"}
-
-# Rate limiting
-model_gateway_rate_limit_remaining{model="gemma3:12b"}
-model_gateway_rate_limit_rejections_total{model="gemma3:12b"}
-```
-
-### Logs
-
-Structured JSON logging:
-
-```json
-{
-  "timestamp": "2026-01-09T18:00:00Z",
-  "level": "INFO",
-  "service": "model-gateway",
-  "trace_id": "d81215d87cd927d7",
-  "span_id": "a5420fad319a288f",
-  "event": "generation_complete",
-  "model": "gemma3:12b",
-  "provider": "ollama",
-  "tokens_input": 150,
-  "tokens_output": 200,
-  "latency_ms": 1250,
-  "task_id": "abc123"
-}
-```
-
----
-
-## Testing Strategy
-
-### Unit Tests
-
-```python
-# tests/test_router.py
-import pytest
-from src.services.router import ModelRouter
-
-@pytest.fixture
-def router():
-    return ModelRouter(config_path="tests/fixtures/config.yaml")
-
-def test_resolve_alias(router):
-    assert router.resolve_model("small") == "gemma3:12b"
-    
-def test_select_provider(router):
-    provider = router.select_provider("gemma3:12b")
-    assert provider.name == "ollama"
-
-def test_failover_same_tier(router):
-    # Simulate first provider failure
-    router.mark_unavailable("gemma3:12b", "ollama-1")
-    provider = router.select_provider("gemma3:12b")
-    assert provider.endpoint == "ollama-2"
-```
-
-### Integration Tests
-
-```python
-# tests/test_integration.py
-import pytest
-from httpx import AsyncClient
-from src.main import app
-
-@pytest.mark.asyncio
-async def test_generate_endpoint():
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        response = await client.post(
-            "/api/v1/generate",
-            json={
-                "model": "gemma3:4b",
-                "prompt": "Hello, world!",
-                "max_tokens": 50,
-            },
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert "content" in data
-        assert data["model"] == "gemma3:4b"
-```
-
-### Load Tests
-
-```python
-# tests/load/locustfile.py
-from locust import HttpUser, task, between
-
-class ModelGatewayUser(HttpUser):
-    wait_time = between(1, 3)
-    
-    @task
-    def generate_small(self):
-        self.client.post(
-            "/api/v1/generate",
-            json={
-                "model": "small",
-                "prompt": "Write a haiku about coding.",
-                "max_tokens": 100,
-            },
-        )
-    
-    @task
-    def list_models(self):
-        self.client.get("/api/v1/models")
-```
-
----
-
-## Dependencies
-
-### From dats-common
-
-- `dats_common.telemetry` - OpenTelemetry setup
-- `dats_common.config` - Base settings
-
-### External
-
-```
-# requirements.txt
-fastapi>=0.104.0
-uvicorn>=0.24.0
-httpx>=0.25.0
-pydantic>=2.5.0
-pydantic-settings>=2.1.0
-
-# Providers
-anthropic>=0.7.0
-openai>=1.3.0
-
-# Observability
-opentelemetry-api>=1.21.0
-opentelemetry-sdk>=1.21.0
-opentelemetry-instrumentation-fastapi>=0.42b0
-opentelemetry-exporter-otlp>=1.21.0
-prometheus-client>=0.19.0
-
-# Rate limiting
-limits>=3.6.0
-redis>=5.0.0  # For distributed rate limiting
-```
+1. **Week 1**: Create service, copy clients from `src/models/`
+2. **Week 2**: Add `ModelGatewayClient` to dats-common
+3. **Week 3**: Update agents/workers to use client
+4. **Week 4**: Deploy, gradual traffic switch (10% → 50% → 100%)
 
 ---
 
 ## Environment Variables
 
 ```bash
-# Provider endpoints (from servers.yaml)
-OLLAMA_CPU_LARGE=http://192.168.1.11:11434      # Epyc server - CPU mode for coding
-OLLAMA_GPU_GENERAL=http://192.168.1.12:11434    # RTX4060 server - GPU for general/embeddings
-VLLM_ENDPOINT=http://192.168.1.11:8000/v1       # vLLM on Epyc server
+OLLAMA_CPU_LARGE=http://192.168.1.11:11434
+OLLAMA_GPU_GENERAL=http://192.168.1.12:11434
+VLLM_ENDPOINT=http://192.168.1.11:8000/v1
 ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_ENDPOINT=https://api.anthropic.com/v1
-
-# Service config
-MODEL_GATEWAY_PORT=8000
-MODEL_GATEWAY_CONFIG=/app/config/model-gateway.yaml
-SERVERS_CONFIG=/app/config/servers.yaml         # Reference to centralized server config
-LOG_LEVEL=INFO
-
-# Telemetry
-OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
-OTEL_SERVICE_NAME=model-gateway
-
-# Rate limiting (from servers.yaml infrastructure)
 REDIS_URL=redis://192.168.1.44:6379/0
 RATE_LIMIT_ENABLED=true
 ```
@@ -835,16 +166,8 @@ RATE_LIMIT_ENABLED=true
 
 ## Success Criteria
 
-Before marking complete:
-
 - [ ] All existing tests pass with gateway
 - [ ] P95 latency within 10% of direct client calls
 - [ ] Failover works for provider outages
 - [ ] Rate limiting prevents quota exhaustion
-- [ ] Metrics visible in Grafana
-- [ ] Traces visible in Jaeger
 - [ ] Zero direct model client imports in agents/workers
-
----
-
-*Last updated: January 2026*
