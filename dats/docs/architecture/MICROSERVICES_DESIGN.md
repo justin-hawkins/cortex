@@ -43,12 +43,12 @@ This document defines the microservices architecture for DATS, transforming the 
 | Service | Priority | Team Ownership | Status |
 |---------|----------|----------------|--------|
 | Model Gateway | P0 | Platform | Planned |
-| RAG Service | P1 | Data | Planned |
-| Cascade Service | P2 | Reliability | Planned |
-| QA Service | P2 | Quality | Planned |
-| Agent Service | P3 | AI/ML | Planned |
-| Worker Service | P3 | AI/ML | Planned |
-| Orchestration Service | P4 | Platform | Planned |
+| Agent Service | P1 | AI/ML | Planned |
+| Worker Service | P1 | AI/ML | Planned |
+| Orchestration Service | P2 | Platform | Planned |
+| Cascade Service | P3 | Reliability | Planned |
+| QA Service | P3 | Quality | Planned |
+| RAG Service | P-DEFERRED | Data | Deferred (not core) |
 
 ---
 
@@ -493,16 +493,7 @@ volumes:
 5. Update agents/workers to use client instead of direct import
 6. Deploy alongside monolith, switch traffic gradually
 
-### Phase 3: RAG Service Extraction (Week 5-6)
-
-**Goal**: Isolate LightRAG for independent scaling.
-
-1. Create `services/rag-service/`
-2. Move embedding and query logic
-3. Keep vector store data in dedicated volume
-4. Update workers to use RAG client
-
-### Phase 4: Event Bus Introduction (Week 7-8)
+### Phase 3: Event Bus Introduction (Week 5-6)
 
 **Goal**: Replace Celery with RabbitMQ for task execution.
 
@@ -513,14 +504,30 @@ volumes:
 5. Run Celery and RabbitMQ in parallel during transition
 6. Remove Celery once stable
 
-### Phase 5: Remaining Services (Week 9-16)
+### Phase 4: Core Services Extraction (Week 7-12)
 
 Extract in order:
-1. Cascade Service (Week 9-10)
-2. QA Service (Week 11-12)
-3. Agent Service (Week 13-14)
-4. Worker Service (Week 15)
-5. Orchestration Service (Week 16)
+1. Agent Service (Week 7-8) - Task analysis and decomposition
+2. Worker Service (Week 9-10) - Code generation execution
+3. Orchestration Service (Week 11-12) - Task lifecycle management
+
+### Phase 5: Supporting Services (Week 13-16)
+
+Extract as needed:
+1. Cascade Service (Week 13-14) - Failure propagation
+2. QA Service (Week 15-16) - Output validation
+
+### Phase DEFERRED: RAG Service
+
+**Goal**: Isolate LightRAG for independent scaling (after core is stable).
+
+The RAG Service is **not part of core functionality** and should be extracted only after the main pipeline is working as microservices. Current RAG integration can continue as direct library calls.
+
+When ready to extract:
+1. Create `services/rag-service/`
+2. Move embedding and query logic
+3. Keep vector store data in dedicated volume
+4. Update workers to use RAG client
 
 ---
 

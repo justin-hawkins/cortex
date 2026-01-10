@@ -1,9 +1,9 @@
 # RAG Service
 
 > **DATS Microservice** - Context Retrieval & Embedding Management  
-> Priority: P1 (Second to Extract)  
+> Priority: P-DEFERRED (Not Core Functionality)  
 > Team: Data  
-> Status: Planned
+> Status: Deferred
 
 ---
 
@@ -32,6 +32,8 @@ src/rag/
 - Embedded in worker execution flow
 - No independent scaling (GPU-bound)
 - Invalidation tightly coupled to cascade logic
+
+**Note**: RAG is not part of core functionality. The current direct library integration will continue until the core microservices pipeline is stable. Extract this service only after Phase 5 is complete.
 
 ---
 
