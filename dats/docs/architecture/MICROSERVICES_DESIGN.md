@@ -24,6 +24,9 @@
 
 ## Executive Summary
 
+> **Note**: Infrastructure endpoints (Ollama, vLLM, RabbitMQ, Redis) are defined in 
+> [`servers.yaml`](servers.yaml). All service configurations reference those centralized definitions.
+
 ### Purpose
 
 This document defines the microservices architecture for DATS, transforming the current monolithic POC into a scalable, maintainable, and team-distributable system.
@@ -370,18 +373,17 @@ WORKDIR /app
 
 ```yaml
 # docker-compose.yml
+# NOTE: This uses external infrastructure defined in servers.yaml
+# - RabbitMQ: 192.168.1.49:5672
+# - Redis: 192.168.1.44:6379
+# - Ollama (CPU/coding): 192.168.1.11:11434
+# - Ollama (GPU/general): 192.168.1.12:11434
+# - vLLM: 192.168.1.11:8000
+
 version: '3.8'
 
 services:
-  # Infrastructure
-  rabbitmq:
-    image: rabbitmq:3.12-management
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-
+  # Local Infrastructure (for development - production uses servers.yaml endpoints)
   postgres:
     image: postgres:15
     environment:
@@ -412,13 +414,26 @@ services:
     ports:
       - "8001:8000"
     environment:
-      - OLLAMA_HOST=http://host.docker.internal:11434
+      # From servers.yaml endpoints
+      - OLLAMA_CPU_LARGE=http://192.168.1.11:11434
+      - OLLAMA_GPU_GENERAL=http://192.168.1.12:11434
+      - VLLM_ENDPOINT=http://192.168.1.11:8000/v1
+      - ANTHROPIC_ENDPOINT=https://api.anthropic.com/v1
+      # From servers.yaml infrastructure
+      - REDIS_URL=redis://192.168.1.44:6379/0
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
 
   rag-service:
     build: ./services/rag-service
     ports:
       - "8002:8000"
+    environment:
+      # From servers.yaml defaults.embedding
+      - EMBEDDING_MODEL=mxbai-embed-large:335m
+      - OLLAMA_EMBEDDING_URL=http://192.168.1.12:11434
+      # From servers.yaml infrastructure.rabbitmq
+      - RABBITMQ_HOST=192.168.1.49
+      - RABBITMQ_PORT=5672
     depends_on:
       - model-gateway
 
@@ -426,16 +441,22 @@ services:
     build: ./services/cascade-service
     ports:
       - "8003:8000"
+    environment:
+      # From servers.yaml infrastructure
+      - RABBITMQ_HOST=192.168.1.49
+      - RABBITMQ_PORT=5672
+      - REDIS_URL=redis://192.168.1.44:6379/0
     depends_on:
-      - rabbitmq
       - postgres
 
   qa-service:
     build: ./services/qa-service
     ports:
       - "8004:8000"
+    environment:
+      - RABBITMQ_HOST=192.168.1.49
+      - RABBITMQ_PORT=5672
     depends_on:
-      - rabbitmq
       - model-gateway
 
   agent-service:
@@ -449,8 +470,10 @@ services:
     build: ./services/worker-service
     ports:
       - "8006:8000"
+    environment:
+      - RABBITMQ_HOST=192.168.1.49
+      - RABBITMQ_PORT=5672
     depends_on:
-      - rabbitmq
       - model-gateway
       - rag-service
 
@@ -458,13 +481,15 @@ services:
     build: ./services/orchestration-service
     ports:
       - "8000:8000"
+    environment:
+      - RABBITMQ_HOST=192.168.1.49
+      - RABBITMQ_PORT=5672
+      - REDIS_URL=redis://192.168.1.44:6379/0
     depends_on:
-      - rabbitmq
       - postgres
       - agent-service
 
 volumes:
-  rabbitmq_data:
   postgres_data:
   minio_data:
 ```

@@ -38,6 +38,9 @@ src/cascade/
 
 ## API Specification
 
+> **Note**: Infrastructure endpoints (RabbitMQ, Redis, PostgreSQL) are defined in 
+> [`servers.yaml`](../servers.yaml). This document references those centralized definitions.
+
 ### Base URL
 
 ```
@@ -329,13 +332,23 @@ rollback:
   max_rollback_age_days: 30
   
 events:
+  # From servers.yaml infrastructure.rabbitmq
   rabbitmq:
-    host: rabbitmq
+    host: 192.168.1.49
     port: 5672
+    user: guest
+    password: guest
+    vhost: /
     exchanges:
       - task.events
       - cascade.events
     queue: cascade-service-events
+
+# Result backend (from servers.yaml infrastructure.redis)
+redis:
+  host: 192.168.1.44
+  port: 6379
+  db: 0
 ```
 
 ---

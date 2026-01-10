@@ -34,6 +34,9 @@ src/agents/
 
 ## API Specification
 
+> **Note**: Infrastructure endpoints (Model Gateway, RabbitMQ) are defined in 
+> [`servers.yaml`](../servers.yaml). This document references those centralized definitions.
+
 ### Base URL
 
 ```
@@ -179,17 +182,22 @@ Health check.
 
 ```yaml
 # config/agent-service.yaml
+# NOTE: Server endpoints are defined in servers.yaml - this config references those definitions
+
 agents:
   coordinator:
+    # Uses large tier - maps to openai/gpt-oss-20b on vllm_gpu (from servers.yaml)
     preferred_tier: large
     timeout_seconds: 60
     
   decomposer:
+    # Uses large tier for complex decomposition
     preferred_tier: large
     max_depth: 5
     max_subtasks: 20
     
   complexity_estimator:
+    # Uses small tier - maps to gemma3:12b on ollama_gpu_general (from servers.yaml)
     preferred_tier: small
     timeout_seconds: 30
 
@@ -198,6 +206,12 @@ prompts:
   
 model_gateway:
   url: http://model-gateway:8000/api/v1
+
+# For direct LLM access (bypassing gateway during development)
+direct_llm:
+  ollama_gpu_general: http://192.168.1.12:11434  # gemma3 models
+  ollama_cpu_large: http://192.168.1.11:11434    # qwen3-coder models
+  vllm_gpu: http://192.168.1.11:8000/v1          # gpt-oss-20b
 ```
 
 ---

@@ -1,0 +1,141 @@
+# Centralized Server Configuration for DATS
+# All server IPs, services, and available models are defined here
+
+servers:
+  # AMD Epyc CPU server with RTX 5060 Ti GPUs
+  epyc_server:
+    description: "AMD Epyc 32-core 7532 with 2x RTX5060Ti 16GB"
+    host: "192.168.1.11"
+    services:
+      ollama:
+        port: 11434
+        mode: cpu  # Running in CPU-only mode for higher precision models
+        models:
+          - name: qwen3-coder:30b-a3b-q8_0-64k
+            context_window: 65536
+            description: "30B coder model with Q8 quantization"
+          - name: qwen3-coder:30b-a3b-fp16-64k
+            context_window: 65536
+            description: "30B coder model with FP16 precision"
+      vllm:
+        port: 8000
+        path: "/v1"
+        mode: gpu  # Using 2x RTX5060Ti 16GB
+        models:
+          - name: openai/gpt-oss-20b
+            context_window: 32768
+            description: "20B GPT-OSS model via vLLM (OpenAI-compatible naming)"
+
+  # RTX 4060 Ti GPU server
+  rtx4060_server:
+    description: "2x RTX4060Ti 16GB"
+    host: "192.168.1.12"
+    services:
+      ollama:
+        port: 11434
+        mode: gpu
+        models:
+          - name: gemma3:4b
+            context_window: 32768
+            tier: tiny
+            description: "Gemma 3 4B - fast inference"
+          - name: gemma3:12b
+            context_window: 32768
+            tier: small
+            description: "Gemma 3 12B - balanced"
+          - name: gemma3:27b
+            context_window: 32768
+            tier: medium
+            description: "Gemma 3 27B - higher quality"
+          - name: gpt-oss:20b
+            context_window: 32768
+            description: "20B GPT-OSS model"
+          - name: mxbai-embed-large:335m
+            context_window: 512
+            type: embedding
+            description: "Embedding model for RAG"
+          - name: mxbai-embed-large:latest
+            context_window: 512
+            type: embedding
+            description: "Embedding model (latest)"
+          - name: qwen3-4b-m32k:latest
+            context_window: 32768
+            tier: tiny
+            description: "Qwen3 4B with 32k context"
+          - name: qwen3-coder:30b
+            context_window: 32768
+            description: "30B coder model (default quant)"
+          - name: qwen3-coder:30b-32k
+            context_window: 32768
+            description: "30B coder model with 32k context"
+          - name: qwen3-coder:30b-64k
+            context_window: 65536
+            description: "30B coder model with 64k context"
+
+# Infrastructure services
+infrastructure:
+  rabbitmq:
+    host: "192.168.1.49"
+    port: 5672
+    user: "guest"
+    password: "guest"
+    vhost: "/"
+    description: "Message broker for Celery task queue"
+
+  redis:
+    host: "192.168.1.44"
+    port: 6379
+    db: 0
+    description: "Result backend for task results"
+
+  anthropic:
+    endpoint: "https://api.anthropic.com/v1"
+    description: "Anthropic API for frontier models"
+
+# Endpoint aliases for easy reference
+endpoints:
+  # Ollama endpoints
+  ollama_cpu_large:
+    server: epyc_server
+    service: ollama
+    url: "http://192.168.1.11:11434"
+    description: "CPU Ollama for large/high-precision models"
+
+  ollama_gpu_general:
+    server: rtx4060_server
+    service: ollama
+    url: "http://192.168.1.12:11434"
+    description: "GPU Ollama for general models and embeddings"
+
+  # vLLM endpoint
+  vllm_gpu:
+    server: epyc_server
+    service: vllm
+    url: "http://192.168.1.11:8000/v1"
+    description: "vLLM OpenAI-compatible API"
+
+# Default assignments for specific use cases
+defaults:
+  embedding:
+    endpoint: ollama_gpu_general
+    model: mxbai-embed-large:335m
+
+  tiny_inference:
+    endpoint: ollama_gpu_general
+    model: gemma3:4b
+
+  small_inference:
+    endpoint: ollama_gpu_general
+    model: gemma3:12b
+
+  large_inference:
+    endpoint: vllm_gpu
+    model: openai/gpt-oss-20b
+
+  coding:
+    endpoint: ollama_cpu_large
+    model: qwen3-coder:30b-a3b-q8_0-64k
+
+  coding_high_precision:
+    endpoint: ollama_cpu_large
+    model: qwen3-coder:30b-a3b-fp16-64k

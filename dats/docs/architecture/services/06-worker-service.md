@@ -34,6 +34,9 @@ src/workers/
 
 ## API Specification
 
+> **Note**: Infrastructure endpoints (Model Gateway, RAG Service, RabbitMQ) are defined in 
+> [`servers.yaml`](../servers.yaml). This document references those centralized definitions.
+
 ### Base URL
 
 ```
@@ -140,18 +143,40 @@ Health check with worker availability.
 
 ```yaml
 # config/worker-service.yaml
+# NOTE: Server endpoints are defined in servers.yaml - this config references those definitions
+
 workers:
   code-general:
     prompt_template: workers/code_general.md
+    # Maps to gemma3:12b on ollama_gpu_general (from servers.yaml defaults.small_inference)
     default_tier: small
     
   code-vision:
     prompt_template: workers/code_vision.md
+    # Maps to openai/gpt-oss-20b on vllm_gpu (from servers.yaml defaults.large_inference)
     default_tier: large
     
   code-embedded:
     prompt_template: workers/code_embedded.md
     default_tier: small
+
+# Tier-to-model mapping (from servers.yaml)
+tier_models:
+  tiny:
+    model: gemma3:4b
+    endpoint: ollama_gpu_general  # http://192.168.1.12:11434
+  small:
+    model: gemma3:12b
+    endpoint: ollama_gpu_general  # http://192.168.1.12:11434
+  large:
+    model: openai/gpt-oss-20b
+    endpoint: vllm_gpu            # http://192.168.1.11:8000/v1
+  coding:
+    model: qwen3-coder:30b-a3b-q8_0-64k
+    endpoint: ollama_cpu_large    # http://192.168.1.11:11434
+  frontier:
+    model: claude-sonnet-4-20250514
+    endpoint: anthropic           # https://api.anthropic.com/v1
 
 queues:
   tiny:
@@ -174,10 +199,15 @@ rag_service:
   url: http://rag-service:8000/api/v1
 
 events:
+  # From servers.yaml infrastructure.rabbitmq
   rabbitmq:
-    host: rabbitmq
+    host: 192.168.1.49
     port: 5672
+    user: guest
+    password: guest
+    vhost: /
     exchange: task.events
+    queue: worker-service-events
 ```
 
 ---

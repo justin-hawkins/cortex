@@ -39,6 +39,9 @@ src/rag/
 
 ## API Specification
 
+> **Note**: Infrastructure endpoints (Ollama, RabbitMQ, Redis) are defined in 
+> [`servers.yaml`](../servers.yaml). This document references those centralized definitions.
+
 ### Base URL
 
 ```
@@ -169,7 +172,8 @@ Health check with LightRAG status.
   "lightrag": {
     "status": "connected",
     "index_size": 15000,
-    "embedding_model": "nomic-embed-text"
+    "embedding_model": "mxbai-embed-large:335m",
+    "embedding_endpoint": "ollama_gpu_general"
   },
   "embedding_queue": {
     "pending": 5,
@@ -316,10 +320,15 @@ class EmbedRequest(BaseModel):
 
 ```yaml
 # config/rag-service.yaml
+# NOTE: Server endpoints are defined in servers.yaml - this config references those definitions
+
 lightrag:
   working_dir: /data/lightrag
-  embedding_model: nomic-embed-text
+  # Embedding model from servers.yaml defaults.embedding
+  embedding_model: mxbai-embed-large:335m
   embedding_endpoint: http://model-gateway:8000/api/v1
+  # Direct embedding endpoint (when not using model gateway)
+  embedding_ollama_url: http://192.168.1.12:11434  # ollama_gpu_general
   
   # Vector store
   vector_store:
@@ -348,9 +357,13 @@ embedding:
   retry_attempts: 3
   
 events:
+  # From servers.yaml infrastructure.rabbitmq
   rabbitmq:
-    host: rabbitmq
+    host: 192.168.1.49
     port: 5672
+    user: guest
+    password: guest
+    vhost: /
     exchange: task.events
     queue: rag-service-events
 ```
@@ -724,21 +737,27 @@ prometheus-client>=0.19.0
 ## Environment Variables
 
 ```bash
-# LightRAG
+# LightRAG (from servers.yaml defaults.embedding)
 LIGHTRAG_WORKING_DIR=/data/lightrag
-EMBEDDING_MODEL=nomic-embed-text
+EMBEDDING_MODEL=mxbai-embed-large:335m
 
 # Model Gateway (for embeddings)
 MODEL_GATEWAY_URL=http://model-gateway:8000/api/v1
+
+# Direct Ollama access for embeddings (from servers.yaml endpoints.ollama_gpu_general)
+OLLAMA_EMBEDDING_URL=http://192.168.1.12:11434
 
 # Vector store
 QDRANT_HOST=qdrant
 QDRANT_PORT=6333
 QDRANT_COLLECTION=dats_embeddings
 
-# RabbitMQ
-RABBITMQ_HOST=rabbitmq
+# RabbitMQ (from servers.yaml infrastructure.rabbitmq)
+RABBITMQ_HOST=192.168.1.49
 RABBITMQ_PORT=5672
+RABBITMQ_USER=guest
+RABBITMQ_PASSWORD=guest
+RABBITMQ_VHOST=/
 
 # Telemetry
 OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317

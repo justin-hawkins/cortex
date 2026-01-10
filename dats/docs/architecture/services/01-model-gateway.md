@@ -40,6 +40,9 @@ src/models/
 
 ## API Specification
 
+> **Note**: Infrastructure endpoints (Ollama, vLLM, RabbitMQ, Redis) are defined in 
+> [`servers.yaml`](../servers.yaml). This document references those centralized definitions.
+
 ### Base URL
 
 ```
@@ -115,16 +118,36 @@ List available models and their status.
       "provider": "ollama",
       "tier": "tiny",
       "status": "available",
-      "context_window": 8192,
-      "capabilities": ["text-generation"]
+      "context_window": 32768,
+      "capabilities": ["text-generation"],
+      "endpoint": "ollama_gpu_general"
     },
     {
       "name": "gemma3:12b",
       "provider": "ollama",
       "tier": "small",
       "status": "available",
-      "context_window": 16384,
-      "capabilities": ["text-generation"]
+      "context_window": 32768,
+      "capabilities": ["text-generation"],
+      "endpoint": "ollama_gpu_general"
+    },
+    {
+      "name": "qwen3-coder:30b-a3b-q8_0-64k",
+      "provider": "ollama",
+      "tier": "coding",
+      "status": "available",
+      "context_window": 65536,
+      "capabilities": ["text-generation", "code"],
+      "endpoint": "ollama_cpu_large"
+    },
+    {
+      "name": "openai/gpt-oss-20b",
+      "provider": "vllm",
+      "tier": "large",
+      "status": "available",
+      "context_window": 32768,
+      "capabilities": ["text-generation"],
+      "endpoint": "vllm_gpu"
     },
     {
       "name": "claude-sonnet-4-20250514",
@@ -133,6 +156,15 @@ List available models and their status.
       "status": "available",
       "context_window": 200000,
       "capabilities": ["text-generation", "vision"]
+    },
+    {
+      "name": "mxbai-embed-large:335m",
+      "provider": "ollama",
+      "tier": "embedding",
+      "status": "available",
+      "context_window": 512,
+      "capabilities": ["embedding"],
+      "endpoint": "ollama_gpu_general"
     }
   ]
 }
@@ -152,13 +184,29 @@ Health check endpoint.
   "status": "healthy",
   "version": "1.0.0",
   "providers": {
-    "ollama": {
+    "ollama_cpu_large": {
       "status": "connected",
       "endpoint": "http://192.168.1.11:11434",
-      "models_available": 3
+      "mode": "cpu",
+      "models_available": 2,
+      "description": "AMD Epyc 32-core 7532 with 2x RTX5060Ti 16GB"
+    },
+    "ollama_gpu_general": {
+      "status": "connected",
+      "endpoint": "http://192.168.1.12:11434",
+      "mode": "gpu",
+      "models_available": 10,
+      "description": "2x RTX4060Ti 16GB"
+    },
+    "vllm_gpu": {
+      "status": "connected",
+      "endpoint": "http://192.168.1.11:8000/v1",
+      "mode": "gpu",
+      "models_available": 1
     },
     "anthropic": {
       "status": "connected",
+      "endpoint": "https://api.anthropic.com/v1",
       "rate_limit_remaining": 950
     }
   }
@@ -284,40 +332,64 @@ class ModelInfo(BaseModel):
 
 ```yaml
 # config/model-gateway.yaml
+# NOTE: Server endpoints are defined in servers.yaml - this config references those definitions
+
 providers:
   ollama:
     enabled: true
     endpoints:
-      - host: http://192.168.1.11:11434
+      # CPU server for high-precision coding models
+      - name: ollama_cpu_large
+        host: http://192.168.1.11:11434
+        mode: cpu
         priority: 1
-        models: ["gemma3:4b", "gemma3:12b"]
-      - host: http://192.168.1.12:11434
+        models: 
+          - qwen3-coder:30b-a3b-q8_0-64k
+          - qwen3-coder:30b-a3b-fp16-64k
+      # GPU server for general inference and embeddings
+      - name: ollama_gpu_general
+        host: http://192.168.1.12:11434
+        mode: gpu
         priority: 2
-        models: ["gemma3:12b"]
+        models:
+          - gemma3:4b
+          - gemma3:12b
+          - gemma3:27b
+          - gpt-oss:20b
+          - mxbai-embed-large:335m
+          - qwen3-4b-m32k:latest
+          - qwen3-coder:30b
+          - qwen3-coder:30b-32k
+          - qwen3-coder:30b-64k
     timeout_seconds: 120
     
   anthropic:
     enabled: true
+    endpoint: https://api.anthropic.com/v1
     api_key_env: ANTHROPIC_API_KEY
     rate_limit:
       requests_per_minute: 60
       tokens_per_minute: 100000
     
-  openai_compatible:
+  vllm:
     enabled: true
     endpoint: http://192.168.1.11:8000/v1
-    models: ["gpt-oss-20b"]
+    mode: gpu
+    models: 
+      - openai/gpt-oss-20b
 
+# Model aliases map to servers.yaml defaults
 model_aliases:
-  # Tier-based aliases
-  tiny: gemma3:4b
-  small: gemma3:12b
-  large: gpt-oss-20b
-  frontier: claude-sonnet-4-20250514
+  # Tier-based aliases (from servers.yaml defaults)
+  tiny: gemma3:4b                           # → ollama_gpu_general
+  small: gemma3:12b                         # → ollama_gpu_general
+  large: openai/gpt-oss-20b                 # → vllm_gpu
+  frontier: claude-sonnet-4-20250514        # → anthropic
   
-  # Capability-based aliases
-  code: gemma3:12b
-  reasoning: claude-sonnet-4-20250514
+  # Capability-based aliases (from servers.yaml defaults)
+  coding: qwen3-coder:30b-a3b-q8_0-64k      # → ollama_cpu_large
+  coding_high_precision: qwen3-coder:30b-a3b-fp16-64k  # → ollama_cpu_large
+  embedding: mxbai-embed-large:335m         # → ollama_gpu_general
 
 failover:
   enabled: true
@@ -685,23 +757,25 @@ redis>=5.0.0  # For distributed rate limiting
 ## Environment Variables
 
 ```bash
-# Provider endpoints
-OLLAMA_HOST=http://192.168.1.11:11434
-OLLAMA_HOST_SECONDARY=http://192.168.1.12:11434
-VLLM_ENDPOINT=http://192.168.1.11:8000/v1
+# Provider endpoints (from servers.yaml)
+OLLAMA_CPU_LARGE=http://192.168.1.11:11434      # Epyc server - CPU mode for coding
+OLLAMA_GPU_GENERAL=http://192.168.1.12:11434    # RTX4060 server - GPU for general/embeddings
+VLLM_ENDPOINT=http://192.168.1.11:8000/v1       # vLLM on Epyc server
 ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_ENDPOINT=https://api.anthropic.com/v1
 
 # Service config
 MODEL_GATEWAY_PORT=8000
 MODEL_GATEWAY_CONFIG=/app/config/model-gateway.yaml
+SERVERS_CONFIG=/app/config/servers.yaml         # Reference to centralized server config
 LOG_LEVEL=INFO
 
 # Telemetry
 OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
 OTEL_SERVICE_NAME=model-gateway
 
-# Rate limiting
-REDIS_URL=redis://redis:6379/0
+# Rate limiting (from servers.yaml infrastructure)
+REDIS_URL=redis://192.168.1.44:6379/0
 RATE_LIMIT_ENABLED=true
 ```
 

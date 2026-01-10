@@ -45,6 +45,9 @@ src/qa/
 
 ## API Specification
 
+> **Note**: Infrastructure endpoints (RabbitMQ, Model Gateway) are defined in 
+> [`servers.yaml`](../servers.yaml). This document references those centralized definitions.
+
 ### Base URL
 
 ```
@@ -331,10 +334,15 @@ model_gateway:
   url: http://model-gateway:8000/api/v1
   
 events:
+  # From servers.yaml infrastructure.rabbitmq
   rabbitmq:
-    host: rabbitmq
+    host: 192.168.1.49
     port: 5672
+    user: guest
+    password: guest
+    vhost: /
     exchange: task.events
+    queue: qa-service-events
 ```
 
 ---

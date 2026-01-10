@@ -42,6 +42,9 @@ src/api/
 
 ## API Specification
 
+> **Note**: Infrastructure endpoints (RabbitMQ, Redis, PostgreSQL) are defined in 
+> [`servers.yaml`](../servers.yaml). This document references those centralized definitions.
+
 ### Base URL
 
 ```
@@ -195,6 +198,8 @@ Service health check.
 
 ```yaml
 # config/orchestration-service.yaml
+# NOTE: Server endpoints are defined in servers.yaml - this config references those definitions
+
 task_management:
   default_priority: normal
   max_concurrent_per_project: 10
@@ -209,15 +214,25 @@ storage:
   provenance_table: provenance_records
   
 events:
+  # From servers.yaml infrastructure.rabbitmq
   rabbitmq:
-    host: rabbitmq
+    host: 192.168.1.49
     port: 5672
+    user: guest
+    password: guest
+    vhost: /
     exchanges:
       - task.events
       - cascade.events
       - qa.events
     queues:
       - orchestration-events
+
+# Result backend (from servers.yaml infrastructure.redis)
+redis:
+  host: 192.168.1.44
+  port: 6379
+  db: 0
 ```
 
 ---
