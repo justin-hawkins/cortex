@@ -1,0 +1,395 @@
+# File: services/model-gateway/contracts/openapi.yaml
+openapi: 3.0.3
+info:
+  title: DATS Model Gateway API
+  description: |
+    Unified LLM interface abstracting Ollama, vLLM, and Anthropic behind a consistent API.
+    
+    ## Features
+    - **Provider Agnosticism**: Switch models without changing client code
+    - **Unified API**: Single endpoint for all LLM providers
+    - **Streaming Support**: Server-Sent Events for real-time responses
+    - **Model Discovery**: List available models with status and capabilities
+    
+    ## Model Aliases
+    For convenience, you can use aliases instead of full model names:
+    - `tiny` → gemma3:4b
+    - `small` → gemma3:12b
+    - `large` → openai/gpt-oss-20b
+    - `frontier` → claude-sonnet-4-20250514
+    - `coding` → qwen3-coder:30b-a3b-q8_0-64k
+    - `embedding` → mxbai-embed-large:335m
+  version: 1.0.0
+  contact:
+    name: DATS Team
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local development
+  - url: http://model-gateway:8000/api/v1
+    description: Docker network
+
+tags:
+  - name: health
+    description: Health check endpoints
+  - name: models
+    description: Model listing and information
+  - name: generate
+    description: Text generation
+
+paths:
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Basic health check
+      tags:
+        - health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /health/detailed:
+    get:
+      operationId: detailedHealthCheck
+      summary: Detailed health check with provider status
+      tags:
+        - health
+      responses:
+        '200':
+          description: Detailed health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailedHealthResponse'
+
+  /models:
+    get:
+      operationId: listModels
+      summary: List all available models
+      tags:
+        - models
+      responses:
+        '200':
+          description: List of available models
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsListResponse'
+
+  /models/{name}:
+    get:
+      operationId: getModel
+      summary: Get model information
+      tags:
+        - models
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Model name or alias
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Model information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelResponse'
+        '404':
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /generate:
+    post:
+      operationId: generate
+      summary: Generate text completion
+      description: |
+        Generate text completion from an LLM.
+        
+        If `stream=true`, returns a Server-Sent Events stream with chunks.
+        Otherwise returns the complete response.
+      tags:
+        - generate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateRequest'
+            examples:
+              basic:
+                summary: Basic generation
+                value:
+                  model: "gemma3:12b"
+                  prompt: "Write a Python function to calculate fibonacci"
+                  temperature: 0.7
+                  max_tokens: 2000
+              with_system:
+                summary: With system prompt
+                value:
+                  model: "coding"
+                  prompt: "Write a function to sort a list"
+                  system_prompt: "You are an expert Python developer. Write clean, efficient code."
+                  temperature: 0.5
+                  max_tokens: 1000
+              streaming:
+                summary: Streaming response
+                value:
+                  model: "small"
+                  prompt: "Explain quantum computing"
+                  stream: true
+      responses:
+        '200':
+          description: Generated text (or SSE stream if stream=true)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateResponse'
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-Sent Events stream
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Generation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - version
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        version:
+          type: string
+          example: "1.0.0"
+        timestamp:
+          type: string
+          format: date-time
+
+    DetailedHealthResponse:
+      type: object
+      required:
+        - status
+        - version
+        - timestamp
+        - dependencies
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        version:
+          type: string
+          example: "1.0.0"
+        timestamp:
+          type: string
+          format: date-time
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [connected, disconnected]
+          example:
+            ollama_cpu_large: connected
+            ollama_gpu_general: connected
+            vllm_gpu: disconnected
+            anthropic_api: connected
+
+    ModelResponse:
+      type: object
+      required:
+        - name
+        - provider
+        - endpoint_name
+        - context_window
+        - tier
+        - model_type
+        - description
+        - status
+        - metadata
+      properties:
+        name:
+          type: string
+          example: "gemma3:12b"
+        provider:
+          type: string
+          example: "ollama"
+        endpoint_name:
+          type: string
+          example: "ollama_gpu_general"
+        context_window:
+          type: integer
+          example: 32768
+        tier:
+          type: string
+          enum: [tiny, small, medium, large, frontier, coding]
+        model_type:
+          type: string
+          enum: [chat, completion, embedding]
+        description:
+          type: string
+          example: "Gemma 3 12B - balanced"
+        status:
+          type: string
+          enum: [available, unavailable, unknown, no_api_key]
+        metadata:
+          type: object
+          additionalProperties: true
+
+    ModelsListResponse:
+      type: object
+      required:
+        - models
+        - total
+        - aliases
+      properties:
+        models:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelResponse'
+        total:
+          type: integer
+          example: 10
+        aliases:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            tiny: "gemma3:4b"
+            small: "gemma3:12b"
+            large: "openai/gpt-oss-20b"
+
+    GenerateRequest:
+      type: object
+      required:
+        - model
+        - prompt
+      properties:
+        model:
+          type: string
+          description: Model name or alias
+          example: "gemma3:12b"
+        prompt:
+          type: string
+          description: The prompt to generate from
+          example: "Write a Python function to calculate fibonacci"
+        system_prompt:
+          type: string
+          nullable: true
+          description: Optional system prompt
+          example: "You are an expert developer."
+        temperature:
+          type: number
+          minimum: 0.0
+          maximum: 2.0
+          default: 0.7
+          description: Sampling temperature
+        max_tokens:
+          type: integer
+          minimum: 1
+          maximum: 100000
+          default: 2000
+          description: Maximum tokens to generate
+        stop_sequences:
+          type: array
+          nullable: true
+          items:
+            type: string
+          description: Stop sequences
+        stream:
+          type: boolean
+          default: false
+          description: Enable streaming response
+        metadata:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: Custom metadata
+
+    GenerateResponse:
+      type: object
+      required:
+        - id
+        - model
+        - provider
+        - content
+        - tokens_input
+        - tokens_output
+        - latency_ms
+        - finish_reason
+        - created_at
+        - metadata
+      properties:
+        id:
+          type: string
+          example: "gen-550e8400-e29b-41d4-a716-446655440000"
+        model:
+          type: string
+          example: "gemma3:12b"
+        provider:
+          type: string
+          example: "ollama_gpu_general"
+        content:
+          type: string
+          example: "def fibonacci(n: int) -> int:\n    ..."
+        tokens_input:
+          type: integer
+          example: 150
+        tokens_output:
+          type: integer
+          example: 200
+        latency_ms:
+          type: integer
+          example: 1250
+        finish_reason:
+          type: string
+          enum: [stop, length, content_filter, error]
+        created_at:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          example: "model_not_found"
+        detail:
+          type: string
+          nullable: true
+          example: "Model not found: invalid-model"

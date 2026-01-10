@@ -1,0 +1,33 @@
+# File: services/model-gateway/requirements.txt
+# Locked dependencies for reproducible builds
+# Generated from pyproject.toml
+
+# Web framework
+fastapi==0.104.1
+uvicorn==0.24.0
+httpx==0.25.2
+sse-starlette==1.8.2
+starlette==0.27.0
+
+# Data validation
+pydantic==2.5.2
+pydantic-settings==2.1.0
+pydantic-core==2.14.5
+
+# Configuration
+pyyaml==6.0.1
+
+# Observability
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+opentelemetry-instrumentation-fastapi==0.42b0
+opentelemetry-exporter-otlp==1.21.0
+prometheus-client==0.19.0
+
+# Anthropic client
+anthropic==0.18.1
+
+# Core dependencies
+anyio==4.1.0
+typing-extensions==4.9.0
+annotated-types==0.6.0

@@ -1,0 +1,114 @@
+# File: services/model-gateway/config/model-gateway.yaml
+# Model Gateway Configuration
+# Derived from docs/architecture/servers.yaml
+
+providers:
+  ollama:
+    endpoints:
+      - name: ollama_cpu_large
+        host: ${OLLAMA_CPU_ENDPOINT:-http://192.168.1.11:11434}
+        mode: cpu
+        description: "CPU Ollama for large/high-precision models"
+        models:
+          - name: qwen3-coder:30b-a3b-q8_0-64k
+            context_window: 65536
+            tier: coding
+            description: "30B coder model with Q8 quantization"
+          - name: qwen3-coder:30b-a3b-fp16-64k
+            context_window: 65536
+            tier: coding
+            description: "30B coder model with FP16 precision"
+            
+      - name: ollama_gpu_general
+        host: ${OLLAMA_GPU_ENDPOINT:-http://192.168.1.12:11434}
+        mode: gpu
+        description: "GPU Ollama for general models and embeddings"
+        models:
+          - name: gemma3:4b
+            context_window: 32768
+            tier: tiny
+            description: "Gemma 3 4B - fast inference"
+          - name: gemma3:12b
+            context_window: 32768
+            tier: small
+            description: "Gemma 3 12B - balanced"
+          - name: gemma3:27b
+            context_window: 32768
+            tier: medium
+            description: "Gemma 3 27B - higher quality"
+          - name: gpt-oss:20b
+            context_window: 32768
+            tier: large
+            description: "20B GPT-OSS model"
+          - name: mxbai-embed-large:335m
+            context_window: 512
+            type: embedding
+            description: "Embedding model for RAG"
+          - name: qwen3-4b-m32k:latest
+            context_window: 32768
+            tier: tiny
+            description: "Qwen3 4B with 32k context"
+          - name: qwen3-coder:30b
+            context_window: 32768
+            tier: coding
+            description: "30B coder model (default quant)"
+
+  vllm:
+    endpoints:
+      - name: vllm_gpu
+        host: ${VLLM_ENDPOINT:-http://192.168.1.11:8000/v1}
+        mode: gpu
+        description: "vLLM OpenAI-compatible API"
+        models:
+          - name: openai/gpt-oss-20b
+            context_window: 32768
+            tier: large
+            description: "20B GPT-OSS model via vLLM"
+
+  anthropic:
+    endpoints:
+      - name: anthropic_api
+        host: https://api.anthropic.com/v1
+        api_key: ${ANTHROPIC_API_KEY:-}
+        description: "Anthropic API for frontier models"
+        models:
+          - name: claude-sonnet-4-20250514
+            context_window: 200000
+            tier: frontier
+            description: "Claude Sonnet 4 - best quality"
+          - name: claude-haiku-3-20240307
+            context_window: 200000
+            tier: small
+            description: "Claude Haiku 3 - fast and cheap"
+
+# Model aliases for convenience
+model_aliases:
+  tiny: gemma3:4b
+  small: gemma3:12b
+  medium: gemma3:27b
+  large: openai/gpt-oss-20b
+  frontier: claude-sonnet-4-20250514
+  coding: qwen3-coder:30b-a3b-q8_0-64k
+  coding_hp: qwen3-coder:30b-a3b-fp16-64k
+  embedding: mxbai-embed-large:335m
+
+# Failover strategies (priority order)
+failover:
+  strategies:
+    - same_tier      # Try another model in same tier
+    - tier_up        # Try a higher tier model
+    - provider_fallback  # Try a different provider
+  
+  # Tier hierarchy (lower index = lower tier)
+  tier_order:
+    - tiny
+    - small
+    - medium
+    - large
+    - frontier
+
+# Default settings
+defaults:
+  temperature: 0.7
+  max_tokens: 2000
+  timeout_seconds: 300
