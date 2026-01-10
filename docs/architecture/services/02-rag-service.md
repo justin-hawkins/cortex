@@ -7,6 +7,52 @@
 
 ---
 
+## Contract Specifications
+
+| Type | Location | Description |
+|------|----------|-------------|
+| OpenAPI | `services/rag-service/contracts/openapi.yaml` | REST API specification |
+| AsyncAPI | `services/rag-service/contracts/asyncapi.yaml` | Event subscriptions (task.validated, artifact.tainted) |
+
+See [Contract Guidelines](../contracts/README.md) for how to create and maintain contracts.
+
+---
+
+## Folder Structure
+
+```
+services/rag-service/
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml
+├── requirements.txt
+├── Makefile
+├── README.md
+├── src/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── config.py
+│   ├── routers/
+│   │   ├── query.py
+│   │   ├── embed.py
+│   │   └── health.py
+│   └── services/
+│       ├── embedding.py
+│       └── retrieval.py
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── contract/
+├── config/
+└── contracts/
+    ├── openapi.yaml
+    └── asyncapi.yaml
+```
+
+See [ADR-001](../decisions/001-repo-strategy.md) for folder structure requirements.
+
+---
+
 ## Overview
 
 ### Purpose

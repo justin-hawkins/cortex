@@ -7,6 +7,58 @@
 
 ---
 
+## Contract Specifications
+
+| Type | Location | Description |
+|------|----------|-------------|
+| OpenAPI | `services/cascade-service/contracts/openapi.yaml` | REST API specification |
+| AsyncAPI | `services/cascade-service/contracts/asyncapi.yaml` | Events (cascade.started, artifact.tainted, etc.) |
+
+See [Contract Guidelines](../contracts/README.md) for how to create and maintain contracts.
+
+---
+
+## Folder Structure
+
+```
+services/cascade-service/
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml
+├── requirements.txt
+├── Makefile
+├── README.md
+├── src/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── config.py
+│   ├── routers/
+│   │   ├── taint.py
+│   │   ├── rollback.py
+│   │   ├── checkpoints.py
+│   │   └── health.py
+│   ├── services/
+│   │   ├── detector.py
+│   │   ├── taint_propagator.py
+│   │   ├── revalidation.py
+│   │   └── rollback.py
+│   └── events/
+│       ├── handlers.py
+│       └── publisher.py
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── contract/
+├── config/
+└── contracts/
+    ├── openapi.yaml
+    └── asyncapi.yaml
+```
+
+See [ADR-001](../decisions/001-repo-strategy.md) for folder structure requirements.
+
+---
+
 ## Overview
 
 ### Purpose

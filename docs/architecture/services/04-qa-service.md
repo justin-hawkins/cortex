@@ -7,6 +7,56 @@
 
 ---
 
+## Contract Specifications
+
+| Type | Location | Description |
+|------|----------|-------------|
+| OpenAPI | `services/qa-service/contracts/openapi.yaml` | REST API specification |
+| AsyncAPI | `services/qa-service/contracts/asyncapi.yaml` | Events (task.validated, task.rejected, review.requested) |
+
+See [Contract Guidelines](../contracts/README.md) for how to create and maintain contracts.
+
+---
+
+## Folder Structure
+
+```
+services/qa-service/
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml
+├── requirements.txt
+├── Makefile
+├── README.md
+├── src/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── config.py
+│   ├── routers/
+│   │   ├── validate.py
+│   │   ├── reviews.py
+│   │   └── health.py
+│   ├── services/
+│   │   ├── validator.py
+│   │   ├── profiles.py
+│   │   └── human_review.py
+│   └── events/
+│       ├── handlers.py
+│       └── publisher.py
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── contract/
+├── config/
+└── contracts/
+    ├── openapi.yaml
+    └── asyncapi.yaml
+```
+
+See [ADR-001](../decisions/001-repo-strategy.md) for folder structure requirements.
+
+---
+
 ## Overview
 
 ### Purpose

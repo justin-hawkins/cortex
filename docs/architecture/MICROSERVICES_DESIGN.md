@@ -34,12 +34,14 @@ This document defines the microservices architecture for DATS, transforming the 
 ### Key Decisions
 
 | Decision | Choice | Rationale |
-|----------|--------|-----------|
+|----------|--------|-----------
 | **Message Bus** | RabbitMQ | Rich routing, dead-letter queues, mature ecosystem |
 | **API Format** | REST + OpenAPI | Developer familiarity, tooling; gRPC-ready for future |
+| **Event Contracts** | AsyncAPI | Standardized async API specs, matches OpenAPI for events |
 | **Deployment** | Docker Compose → K8s | Start simple, scale when needed |
 | **Shared Code** | Python package (`dats-common`) | Type sharing, avoid duplication |
 | **Repo Strategy** | Monorepo → Multi-repo | Start unified, split as teams form |
+| **Service Independence** | Self-contained folders | Enable independent deployment, future repo split |
 
 ### Service Inventory
 
@@ -553,6 +555,177 @@ When ready to extract:
 2. Move embedding and query logic
 3. Keep vector store data in dedicated volume
 4. Update workers to use RAG client
+
+---
+
+## Independent Deployment
+
+### Principles
+
+Each service must be independently deployable, enabling teams to release at their own pace (even 20+ deployments per day).
+
+#### Self-Contained Service Folders
+
+Every service folder must be deployable as a standalone repository:
+
+```
+services/{service-name}/
+├── Dockerfile                 # Self-contained build
+├── docker-compose.yml         # Local dev with dependencies
+├── pyproject.toml             # Own dependencies (references dats-common)
+├── requirements.txt           # Locked deps for reproducible builds
+├── src/                       # Service code
+├── tests/                     # Service tests (unit + integration)
+├── config/                    # Service-specific config
+├── contracts/                 # Service's OpenAPI/AsyncAPI specs
+│   ├── openapi.yaml
+│   └── asyncapi.yaml
+├── Makefile                   # Common commands (build, test, lint)
+└── README.md                  # Setup instructions
+```
+
+#### Deployment Independence Rules
+
+1. **No cross-service imports** - Only communicate via contracts (HTTP/events)
+2. **Own CI pipeline** - Each service can be built/tested/deployed independently
+3. **Versioned contracts** - Breaking changes require version bump
+4. **Feature flags** - New features behind flags, not blocked by other services
+5. **Health-first** - Services must start and pass health checks without other services running
+
+#### Definition of Done
+
+All service changes must comply with [SERVICE_DONE_DEFINITION.md](SERVICE_DONE_DEFINITION.md).
+
+---
+
+## CI/CD Patterns
+
+### Monorepo Smart Builds
+
+While in monorepo phase, use path-based triggers:
+
+```yaml
+# .github/workflows/model-gateway.yml
+on:
+  push:
+    paths:
+      - 'services/model-gateway/**'
+      - 'packages/dats-common/**'
+      - '.github/workflows/model-gateway.yml'
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cd services/model-gateway && make build
+      - name: Test
+        run: cd services/model-gateway && make test
+      - name: Contract Test
+        run: cd services/model-gateway && make contract-test
+```
+
+### Per-Service Pipelines
+
+Each service should have its own pipeline that:
+
+1. **Builds** - Docker image with version tag
+2. **Tests** - Unit, integration, and contract tests
+3. **Publishes** - Push to container registry
+4. **Deploys** - To target environment (dev/staging/prod)
+
+### Contract Testing in CI
+
+```yaml
+# Contract validation step
+- name: Validate OpenAPI
+  run: |
+    npx @stoplight/spectral-cli lint services/$SERVICE/contracts/openapi.yaml
+
+- name: Validate AsyncAPI  
+  run: |
+    npx @asyncapi/cli validate services/$SERVICE/contracts/asyncapi.yaml
+
+- name: Contract Compatibility Check
+  run: |
+    # Check for breaking changes against main branch
+    make contract-diff
+```
+
+---
+
+## Contract Versioning
+
+### Semantic Versioning for Contracts
+
+Contracts follow semantic versioning (MAJOR.MINOR.PATCH):
+
+| Change Type | Version Bump | Example |
+|-------------|--------------|---------|
+| Breaking (removed field, changed type) | MAJOR | 1.0.0 → 2.0.0 |
+| Additive (new optional field, new endpoint) | MINOR | 1.0.0 → 1.1.0 |
+| Fix (documentation, examples) | PATCH | 1.0.0 → 1.0.1 |
+
+### Contract-First Development
+
+1. **Design** - Write OpenAPI/AsyncAPI spec before implementation
+2. **Review** - Contract reviewed by consuming teams
+3. **Mock** - Consumers can develop against mock server
+4. **Implement** - Provider implements to match contract
+5. **Validate** - Contract tests verify implementation matches spec
+
+### Backward Compatibility
+
+- **Default**: Contracts must be backward compatible for 2 release cycles
+- **Breaking changes**: Require explicit consumer migration plan
+- **Deprecation**: Mark deprecated fields, remove after 2 cycles
+
+---
+
+## dats-common Compatibility
+
+### Versioning Strategy
+
+`dats-common` is the only shared code between services:
+
+```
+packages/dats-common/
+├── pyproject.toml           # Version: 1.x.x
+├── src/dats_common/
+│   ├── models/              # Pydantic models (TaskRequest, etc.)
+│   ├── clients/             # Service clients (ModelGatewayClient, etc.)
+│   ├── telemetry/           # OpenTelemetry setup
+│   └── config/              # Shared settings
+```
+
+### Dependency Management
+
+| Scenario | Approach |
+|----------|----------|
+| Non-breaking update | All services update together |
+| Breaking change | Version bump, services migrate at own pace |
+| Urgent security fix | Hotfix branch, coordinate rapid update |
+
+### Version Pinning
+
+Services pin `dats-common` version in their `pyproject.toml`:
+
+```toml
+[project]
+dependencies = [
+    "dats-common>=1.2.0,<2.0.0",  # Compatible with 1.x
+]
+```
+
+### Update Without Blocking
+
+1. **Backward compatible changes** - Update dats-common, services auto-update on next deploy
+2. **Breaking changes** - 
+   - Release dats-common 2.0.0
+   - Services continue on 1.x until ready
+   - Each service migrates and updates dependency
+   - Remove 1.x support after all services migrated
 
 ---
 

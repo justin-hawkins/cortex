@@ -7,6 +7,58 @@
 
 ---
 
+## Contract Specifications
+
+| Type | Location | Description |
+|------|----------|-------------|
+| OpenAPI | `services/model-gateway/contracts/openapi.yaml` | REST API specification |
+| AsyncAPI | N/A | No events (stateless service) |
+
+See [Contract Guidelines](../contracts/README.md) for how to create and maintain contracts.
+
+---
+
+## Folder Structure
+
+```
+services/model-gateway/
+├── Dockerfile                 # Self-contained build
+├── docker-compose.yml         # Local dev with dependencies
+├── pyproject.toml             # Dependencies (references dats-common)
+├── requirements.txt           # Locked deps for reproducible builds
+├── Makefile                   # build, test, lint, contract-test
+├── README.md                  # Setup instructions
+├── src/
+│   ├── __init__.py
+│   ├── main.py                # FastAPI app
+│   ├── config.py              # Settings
+│   ├── routers/
+│   │   ├── generate.py
+│   │   ├── models.py
+│   │   └── health.py
+│   ├── providers/
+│   │   ├── base.py
+│   │   ├── ollama.py
+│   │   ├── anthropic.py
+│   │   └── openai.py
+│   └── services/
+│       ├── router.py          # Model routing logic
+│       ├── rate_limiter.py
+│       └── failover.py
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── contract/              # OpenAPI compliance tests
+├── config/
+│   └── model-gateway.yaml
+└── contracts/
+    └── openapi.yaml           # REST API contract
+```
+
+See [ADR-001](../decisions/001-repo-strategy.md) for folder structure requirements.
+
+---
+
 ## Overview
 
 ### Purpose

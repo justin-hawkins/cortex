@@ -1,9 +1,60 @@
 # Worker Service
 
 > **DATS Microservice** - Code Generation Execution  
-> Priority: P3  
+> Priority: P1  
 > Team: AI/ML  
 > Status: Planned
+
+---
+
+## Contract Specifications
+
+| Type | Location | Description |
+|------|----------|-------------|
+| OpenAPI | `services/worker-service/contracts/openapi.yaml` | REST API specification (health, status) |
+| AsyncAPI | `services/worker-service/contracts/asyncapi.yaml` | Events (subscribes task.ready, publishes task.output.created) |
+
+See [Contract Guidelines](../contracts/README.md) for how to create and maintain contracts.
+
+---
+
+## Folder Structure
+
+```
+services/worker-service/
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml
+├── requirements.txt
+├── Makefile
+├── README.md
+├── src/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── config.py
+│   ├── routers/
+│   │   └── health.py
+│   ├── workers/
+│   │   ├── base.py
+│   │   ├── code_general.py
+│   │   ├── code_vision.py
+│   │   ├── code_embedded.py
+│   │   ├── documentation.py
+│   │   └── ui_design.py
+│   └── events/
+│       ├── handlers.py
+│       └── publisher.py
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── contract/
+├── config/
+└── contracts/
+    ├── openapi.yaml
+    └── asyncapi.yaml
+```
+
+See [ADR-001](../decisions/001-repo-strategy.md) for folder structure requirements.
 
 ---
 

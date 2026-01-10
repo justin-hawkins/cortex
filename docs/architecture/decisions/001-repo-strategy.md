@@ -58,17 +58,62 @@ Consider splitting when:
 - Build times become prohibitive (> 10 minutes)
 - Teams want different branching strategies
 
+## Self-Contained Service Folder Requirements
+
+Each service folder MUST be structured for independent deployment and future repo separation:
+
+### Required Structure
+
+```
+services/{service-name}/
+├── Dockerfile                 # Self-contained build
+├── docker-compose.yml         # Local dev with dependencies
+├── pyproject.toml             # Own dependencies (references dats-common)
+├── requirements.txt           # Locked deps for reproducible builds
+├── src/                       # Service code
+├── tests/                     # Service tests (unit + integration)
+├── config/                    # Service-specific config
+├── contracts/                 # Service's OpenAPI/AsyncAPI specs
+│   ├── openapi.yaml
+│   └── asyncapi.yaml
+├── Makefile                   # Common commands (build, test, lint)
+└── README.md                  # Setup instructions
+```
+
+### Independence Rules
+
+1. **No cross-service imports** - Services communicate only via HTTP or events
+2. **Own CI pipeline** - Each service can be built/tested/deployed independently
+3. **Self-sufficient tests** - Tests run without other services (use mocks/stubs)
+4. **Health-first startup** - Service starts and passes health check without dependencies
+
+### Validation Checklist
+
+Before marking a service as "repo-ready":
+
+- [ ] `docker build .` works from service folder
+- [ ] `make test` passes without other services running
+- [ ] `make lint` passes
+- [ ] README contains complete setup instructions
+- [ ] No imports from `../` or other service folders
+- [ ] Contract files exist and are valid
+
+---
+
 ## Consequences
 
 ### Positive
 - Simplified initial development
 - Easy cross-service refactoring
 - Single CI/CD pipeline to maintain
+- **Services ready for repo split when needed**
+- **Teams can deploy independently (20+ deploys/day possible)**
 
 ### Negative
 - All services versioned together
 - Larger clone/build times as project grows
 - Must be disciplined about service boundaries
+- **Additional overhead maintaining per-service structure**
 
 ---
 

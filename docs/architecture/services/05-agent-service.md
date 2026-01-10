@@ -1,9 +1,56 @@
 # Agent Service
 
 > **DATS Microservice** - Task Analysis & Decomposition  
-> Priority: P3  
+> Priority: P1  
 > Team: AI/ML  
 > Status: Planned
+
+---
+
+## Contract Specifications
+
+| Type | Location | Description |
+|------|----------|-------------|
+| OpenAPI | `services/agent-service/contracts/openapi.yaml` | REST API specification |
+| AsyncAPI | N/A | No events (stateless, uses Model Gateway) |
+
+See [Contract Guidelines](../contracts/README.md) for how to create and maintain contracts.
+
+---
+
+## Folder Structure
+
+```
+services/agent-service/
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml
+├── requirements.txt
+├── Makefile
+├── README.md
+├── src/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── config.py
+│   ├── routers/
+│   │   ├── analyze.py
+│   │   ├── decompose.py
+│   │   ├── estimate.py
+│   │   └── health.py
+│   └── agents/
+│       ├── coordinator.py
+│       ├── decomposer.py
+│       └── complexity_estimator.py
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── contract/
+├── config/
+└── contracts/
+    └── openapi.yaml
+```
+
+See [ADR-001](../decisions/001-repo-strategy.md) for folder structure requirements.
 
 ---
 

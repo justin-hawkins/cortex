@@ -7,6 +7,57 @@
 
 ---
 
+## Contract Specifications
+
+| Type | Location | Description |
+|------|----------|-------------|
+| OpenAPI | `services/orchestration-service/contracts/openapi.yaml` | REST API specification (tasks, status, provenance) |
+| AsyncAPI | `services/orchestration-service/contracts/asyncapi.yaml` | Events (task.created, task.ready, etc.) |
+
+See [Contract Guidelines](../contracts/README.md) for how to create and maintain contracts.
+
+---
+
+## Folder Structure
+
+```
+services/orchestration-service/
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml
+├── requirements.txt
+├── Makefile
+├── README.md
+├── src/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── config.py
+│   ├── routers/
+│   │   ├── tasks.py
+│   │   ├── projects.py
+│   │   ├── provenance.py
+│   │   └── health.py
+│   ├── services/
+│   │   ├── task_manager.py
+│   │   ├── routing_engine.py
+│   │   └── provenance_store.py
+│   └── events/
+│       ├── handlers.py
+│       └── publisher.py
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── contract/
+├── config/
+└── contracts/
+    ├── openapi.yaml
+    └── asyncapi.yaml
+```
+
+See [ADR-001](../decisions/001-repo-strategy.md) for folder structure requirements.
+
+---
+
 ## Overview
 
 ### Purpose
